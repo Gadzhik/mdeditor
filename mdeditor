@@ -69,15 +69,28 @@ start_server() {
   die "сервер не запустился, см. $LOG_FILE"
 }
 
-# .desktop-файл, который Chromium создаёт при установке MD Editor как приложения
+# .desktop-файл, который Chromium создаёт при установке MD Editor как приложения.
+# Функции, чей вывод берётся через $(…), всегда возвращают 0: иначе set -e молча завершит скрипт.
 pwa_desktop() {
-  grep -lsx 'Name=MD Editor' "$DATA_HOME"/applications/*.desktop | xargs -r grep -ls -- '--app-id=' | head -n 1
+  local f
+  for f in "$DATA_HOME"/applications/*.desktop; do
+    if grep -qsx 'Name=MD Editor' "$f" && grep -qs -- '--app-id=' "$f"; then
+      echo "$f"
+      return 0
+    fi
+  done
+  return 0
 }
 
 chromium_bin() {
+  local b
   for b in chromium google-chrome-stable google-chrome brave brave-browser microsoft-edge-stable vivaldi; do
-    command -v "$b" >/dev/null && { echo "$b"; return; }
+    if command -v "$b" >/dev/null; then
+      echo "$b"
+      return 0
+    fi
   done
+  return 0
 }
 
 open_window() {
