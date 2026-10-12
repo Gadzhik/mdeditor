@@ -160,9 +160,15 @@ set_default() {
   fi
   local name; name=$(basename "$pwa")
   mkdir -p "$CONFIG_DIR"
-  # запоминаем прежние программы один раз, чтобы undefault вернул именно их
+  # запоминаем прежние программы один раз, чтобы undefault вернул именно их.
+  # Chromium при установке может сам назначить приложение — такое значение «прежним» не считаем.
   if [[ ! -f "$PREV_DEFAULTS" ]]; then
-    for t in "${MIME_TYPES[@]}"; do echo "$t=$(xdg-mime query default "$t" 2>/dev/null)"; done >"$PREV_DEFAULTS"
+    local t cur
+    for t in "${MIME_TYPES[@]}"; do
+      cur=$(xdg-mime query default "$t" 2>/dev/null || true)
+      [[ "$cur" == "$name" ]] && cur=""
+      echo "$t=$cur"
+    done >"$PREV_DEFAULTS"
   fi
   xdg-mime default "$name" "${MIME_TYPES[@]}"
   for t in "${MIME_TYPES[@]}"; do
@@ -178,6 +184,8 @@ restore_default() {
     if [[ -n "$app" ]]; then
       xdg-mime default "$app" "$t"
       echo "$t → $app"
+    else
+      echo "$t: прежняя программа неизвестна, выберите её в «Открыть с помощью» файлового менеджера"
     fi
   done <"$PREV_DEFAULTS"
   rm -f "$PREV_DEFAULTS"
