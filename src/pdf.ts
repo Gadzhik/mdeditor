@@ -18,6 +18,7 @@ export interface PdfUi {
   container: HTMLDivElement
   viewer: HTMLDivElement
   outline: HTMLElement
+  thumbs: HTMLElement
   page: HTMLInputElement
   pageCount: HTMLElement
   scale: HTMLSelectElement
@@ -38,6 +39,8 @@ interface OutlineItem {
   items: OutlineItem[]
 }
 
+const THUMB_WIDTH = 120 // CSS-пиксели
+
 export class PdfReader {
   private bus = new EventBus()
   private link = new PDFLinkService({ eventBus: this.bus })
@@ -49,6 +52,12 @@ export class PdfReader {
   private restore: SavedPos | null = null
   private saveTimer = 0
   hasOutline = false
+  // миниатюры рисуются по одной за раз и только видимые в панели
+  private thumbObserver: IntersectionObserver
+  private thumbQueue: number[] = []
+  private thumbBusy = false
+  private thumbGen = 0
+  private activeThumb: HTMLElement | null = null
 
   constructor(private ui: PdfUi) {
     this.viewer = new PDFViewer({
@@ -71,6 +80,7 @@ export class PdfReader {
     })
     this.bus.on('pagechanging', ({ pageNumber }: { pageNumber: number }) => {
       ui.page.value = String(pageNumber)
+      this.highlightThumb(pageNumber)
     })
     this.bus.on('scalechanging', ({ scale, presetValue }: { scale: number; presetValue?: string }) => {
       this.showScale(scale, presetValue)
@@ -117,6 +127,20 @@ export class PdfReader {
         ui.container.focus()
       }
     })
+    this.thumbObserver = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          const n = +(e.target as HTMLElement).dataset.page!
+          if (e.isIntersecting) this.queueThumb(n)
+          else this.thumbQueue = this.thumbQueue.filter((q) => q !== n) // ушла из вида до отрисовки
+        }
+      },
+      { root: ui.thumbs, rootMargin: '300px 0px' },
+    )
+    ui.thumbs.addEventListener('click', (e) => {
+      const item = (e.target as HTMLElement).closest<HTMLElement>('[data-page]')
+      if (item) this.viewer.currentPageNumber = +item.dataset.page!
+    })
     ui.outline.addEventListener('click', (e) => {
       const btn = (e.target as HTMLElement).closest<HTMLElement & { _item?: OutlineItem }>('[data-o]')
       const item = btn?._item
@@ -151,7 +175,7 @@ export class PdfReader {
     this.ui.page.value = '1'
     this.viewer.setDocument(doc)
     this.link.setDocument(doc)
-    await this.renderOutline(doc)
+    await Promise.all([this.renderOutline(doc), this.buildThumbs(doc)])
     this.ui.container.focus({ preventScroll: true })
   }
 
@@ -163,6 +187,11 @@ export class PdfReader {
     this.link.setDocument(null)
     this.ui.outline.textContent = ''
     this.hasOutline = false
+    this.thumbGen++
+    this.thumbObserver.disconnect()
+    this.thumbQueue = []
+    this.activeThumb = null
+    this.ui.thumbs.textContent = ''
     const task = this.task
     this.task = null
     this.doc = null
@@ -229,6 +258,88 @@ export class PdfReader {
     if (!div) return
     const frac = (this.ui.container.scrollTop - div.offsetTop) / (div.clientHeight || 1)
     void kvSet(this.posKey, { page, frac, scale: this.viewer.currentScaleValue } satisfies SavedPos)
+  }
+
+  /** Прокрутить панель миниатюр к текущей странице (когда панель снова показана). */
+  revealThumb() {
+    const t = this.activeThumb
+    const panel = this.ui.thumbs
+    if (!t || !panel.offsetParent) return
+    const r = t.getBoundingClientRect()
+    const p = panel.getBoundingClientRect()
+    // уже видна целиком — не дёргаем панель
+    if (r.top >= p.top && r.bottom <= p.bottom) return
+    panel.scrollTop += r.top - p.top - (p.height - r.height) / 2
+  }
+
+  private highlightThumb(n: number) {
+    this.activeThumb?.classList.remove('active')
+    this.activeThumb = this.ui.thumbs.children[n - 1] as HTMLElement | undefined ?? null
+    if (!this.activeThumb) return
+    this.activeThumb.classList.add('active')
+    this.revealThumb()
+  }
+
+  /** Заглушки нужного размера для всех страниц; содержимое рисуется лениво. */
+  private async buildThumbs(doc: PDFDocumentProxy) {
+    const first = (await doc.getPage(1)).getViewport({ scale: 1 })
+    const frag = document.createDocumentFragment()
+    for (let n = 1; n <= doc.numPages; n++) {
+      const item = document.createElement('button')
+      item.className = 'thumb'
+      item.dataset.page = String(n)
+      item.title = `Страница ${n}`
+      const img = document.createElement('div')
+      img.className = 'thumb-img'
+      img.style.aspectRatio = `${first.width} / ${first.height}`
+      const label = document.createElement('span')
+      label.textContent = String(n)
+      item.append(img, label)
+      frag.appendChild(item)
+    }
+    this.ui.thumbs.appendChild(frag)
+    for (const item of this.ui.thumbs.children) this.thumbObserver.observe(item)
+    this.highlightThumb(this.viewer.currentPageNumber || 1)
+  }
+
+  private queueThumb(n: number) {
+    const item = this.ui.thumbs.children[n - 1] as HTMLElement | undefined
+    if (!item || item.dataset.done || this.thumbQueue.includes(n)) return
+    this.thumbQueue.push(n)
+    void this.drainThumbs()
+  }
+
+  private async drainThumbs() {
+    if (this.thumbBusy) return
+    this.thumbBusy = true
+    const gen = this.thumbGen
+    try {
+      while (this.thumbQueue.length && gen === this.thumbGen && this.doc) {
+        const n = this.thumbQueue.shift()!
+        const item = this.ui.thumbs.children[n - 1] as HTMLElement | undefined
+        if (!item || item.dataset.done) continue
+        item.dataset.done = '1'
+        const page = await this.doc.getPage(n)
+        if (gen !== this.thumbGen) return
+        const base = page.getViewport({ scale: 1 })
+        const viewport = page.getViewport({ scale: (THUMB_WIDTH * devicePixelRatio) / base.width })
+        const canvas = document.createElement('canvas')
+        canvas.width = Math.ceil(viewport.width)
+        canvas.height = Math.ceil(viewport.height)
+        await page.render({ canvas, viewport }).promise
+        if (gen !== this.thumbGen) return
+        const img = item.firstElementChild as HTMLElement
+        img.style.aspectRatio = `${base.width} / ${base.height}`
+        img.replaceChildren(canvas)
+        page.cleanup()
+      }
+    } catch {
+      // документ закрыт во время отрисовки: просто прекращаем
+    } finally {
+      this.thumbBusy = false
+      // за время отрисовки могли прийти новые страницы или новый документ
+      if (this.thumbQueue.length && this.doc) void this.drainThumbs()
+    }
   }
 
   private async renderOutline(doc: PDFDocumentProxy) {

@@ -246,7 +246,7 @@ function newDoc() {
 // --- PDF -----------------------------------------------------------------------
 
 const pdfPane = $('pdf-pane')
-const pdfOutline = $('pdf-outline')
+const pdfSide = $('pdf-side')
 let readerPromise: Promise<PdfReader> | null = null
 
 /** pdf.js (~1 МБ) загружается только при первом открытии PDF. */
@@ -256,7 +256,8 @@ function getReader() {
       new PdfReader({
         container: $<HTMLDivElement>('pdf-container'),
         viewer: $<HTMLDivElement>('pdf-viewer'),
-        outline: pdfOutline,
+        outline: $('pdf-outline'),
+        thumbs: $('pdf-thumbs'),
         page: $<HTMLInputElement>('pdf-page'),
         pageCount: $('pdf-count'),
         scale: $<HTMLSelectElement>('pdf-scale'),
@@ -272,9 +273,16 @@ function setKind(kind: 'md' | 'pdf') {
   pdfPane.hidden = kind !== 'pdf'
 }
 
-function showOutline(show: boolean) {
-  pdfOutline.hidden = !show
-  $('pdf-btn-outline').classList.toggle('on', show)
+function showSide(show: boolean) {
+  pdfSide.hidden = !show
+  $('pdf-btn-side').classList.toggle('on', show)
+  if (show && pdfSide.dataset.tab === 'thumbs') readerPromise?.then((r) => r.revealThumb())
+}
+
+function setPdfTab(tab: string) {
+  pdfSide.dataset.tab = tab
+  for (const b of pdfSide.querySelectorAll<HTMLElement>('.pdf-tabs button')) b.classList.toggle('on', b.dataset.tab === tab)
+  if (tab === 'thumbs') readerPromise?.then((r) => r.revealThumb())
 }
 
 async function openPdf(file: File, handle: FileSystemFileHandle | null, path: string | null) {
@@ -288,7 +296,10 @@ async function openPdf(file: File, handle: FileSystemFileHandle | null, path: st
     const reader = await getReader()
     await reader.open(await file.arrayBuffer())
     if (pdf !== me) return
-    showOutline(reader.hasOutline && store.get('pdfOutline') !== '0')
+    // вкладка «Оглавление» есть смысл открывать, только если оно в файле есть
+    const tab = store.get('pdfTab') ?? (reader.hasOutline ? 'outline' : 'thumbs')
+    setPdfTab(tab === 'outline' && !reader.hasOutline ? 'thumbs' : tab)
+    showSide(store.get('pdfSide') !== '0')
     // без handle (fallback-открытие) PDF после перезагрузки не вернуть
     if (handle) kvSet('lastPdf', me)
     else kvDel('lastPdf')
@@ -318,10 +329,16 @@ $('pdf-zoom-in').onclick = () => getReader().then((r) => r.zoomIn())
 $('pdf-zoom-out').onclick = () => getReader().then((r) => r.zoomOut())
 $('pdf-find-next').onclick = () => getReader().then((r) => r.search(false, true))
 $('pdf-find-prev').onclick = () => getReader().then((r) => r.search(true, true))
-$('pdf-btn-outline').onclick = () => {
-  const show = !!pdfOutline.hidden
-  showOutline(show)
-  store.set('pdfOutline', show ? '1' : '0')
+$('pdf-btn-side').onclick = () => {
+  const show = !!pdfSide.hidden
+  showSide(show)
+  store.set('pdfSide', show ? '1' : '0')
+}
+pdfSide.querySelector<HTMLElement>('.pdf-tabs')!.onclick = (e) => {
+  const tab = (e.target as HTMLElement).dataset.tab
+  if (!tab) return
+  setPdfTab(tab)
+  store.set('pdfTab', tab)
 }
 $('pdf-invert').onclick = () => {
   const on = pdfPane.classList.toggle('invert')

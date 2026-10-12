@@ -44,7 +44,7 @@
       <article id="preview-pane"><div id="preview" class="markdown-body"></div></article>
       <section id="pdf-pane" class="invert" hidden>
         <div id="pdf-toolbar">
-          <button id="pdf-btn-outline" title="Оглавление">Оглавление</button>
+          <button id="pdf-btn-side" title="Миниатюры страниц и оглавление">Панель</button>
           <span class="pdf-pages">
             <input id="pdf-page" type="number" min="1" value="1" title="Номер страницы" />
             <span>/</span>
@@ -77,7 +77,14 @@
           <button id="pdf-close" class="icon" title="Закрыть PDF и вернуться к заметке">✕</button>
         </div>
         <div id="pdf-body">
-          <nav id="pdf-outline"></nav>
+          <aside id="pdf-side" data-tab="thumbs">
+            <div class="pdf-tabs">
+              <button data-tab="thumbs">Страницы</button>
+              <button data-tab="outline">Оглавление</button>
+            </div>
+            <div id="pdf-thumbs"></div>
+            <nav id="pdf-outline"></nav>
+          </aside>
           <div id="pdf-main">
             <div id="pdf-container" tabindex="0"><div id="pdf-viewer" class="pdfViewer"></div></div>
             <div id="pdf-loading" hidden>Загрузка…</div>
