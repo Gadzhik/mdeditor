@@ -75,6 +75,7 @@ export interface Editor {
   getValue(): string
   setValue(text: string, cursor?: number): void
   cursor(): number
+  setCursor(pos: number): void
 }
 
 export function createEditor(parent: HTMLElement, onChange: () => void, onScroll: () => void): Editor {
@@ -119,5 +120,6 @@ export function createEditor(parent: HTMLElement, onChange: () => void, onScroll
       if (cursor) view.dispatch({ effects: EditorView.scrollIntoView(Math.min(cursor, text.length), { y: 'center' }) })
     },
     cursor: () => view.state.selection.main.head,
+    setCursor: (pos) => view.dispatch({ selection: { anchor: Math.min(pos, view.state.doc.length) } }),
   }
 }

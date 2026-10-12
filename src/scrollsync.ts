@@ -1,4 +1,4 @@
-import type { EditorView } from '@codemirror/view'
+import { EditorView } from '@codemirror/view'
 
 const clamp01 = (x: number) => (x < 0 ? 0 : x > 1 ? 1 : x)
 
@@ -52,13 +52,56 @@ export class ScrollSync {
     let target: number
     if (s.scrollTop <= 0) target = 0
     else if (s.scrollTop + s.clientHeight >= s.scrollHeight - 2) target = this.pane.scrollHeight
-    else {
-      const h = s.scrollTop - this.docOffset()
-      const blk = this.view.lineBlockAtHeight(h)
-      const line = this.view.state.doc.lineAt(blk.from).number - 1 + clamp01((h - blk.top) / (blk.height || 1))
-      target = this.lineToY(line)
-    }
+    else target = this.lineToY(this.editorTopLine())
     this.setPane(target)
+  }
+
+  /** Строка исходника (дробная, с 0) у верхнего края редактора. */
+  editorTopLine(): number {
+    const h = this.view.scrollDOM.scrollTop - this.docOffset()
+    const blk = this.view.lineBlockAtHeight(Math.max(0, h))
+    return this.view.state.doc.lineAt(blk.from).number - 1 + clamp01((h - blk.top) / (blk.height || 1))
+  }
+
+  /** Строка исходника у верхнего края превью. */
+  previewTopLine(): number {
+    return this.yToLine(this.pane.scrollTop)
+  }
+
+  /** Прокрутить редактор так, чтобы строка line оказалась у верхнего края. */
+  scrollEditorToLine(line: number) {
+    if (!this.view.dom.offsetParent) return
+    const doc = this.view.state.doc
+    const n = Math.min(Math.floor(Math.max(line, 0)) + 1, doc.lines)
+    if (Math.floor(this.editorTopLine()) === n - 1) return
+    // CodeMirror сам доизмеряет строки по пути, ручной scrollTop промахивается на оценочных высотах
+    this.ignoreEditor = true
+    this.view.dispatch({ effects: EditorView.scrollIntoView(doc.line(n).from, { y: 'start', yMargin: 0 }) })
+  }
+
+  /**
+   * Блоки превью вне экрана имеют оценочную высоту (content-visibility), и после
+   * прокрутки браузер отрисовывает ставшие видимыми блоки с настоящей высотой,
+   * сдвигая раскладку. Довыравниваем, пока не сойдётся. Проверять нужно после
+   * отрисовки кадра (rAF + setTimeout), а не в начале кадра, иначе видна ещё старая раскладка.
+   */
+  scrollPreviewToLine(line: number, tries = 8) {
+    if (!this.pane.offsetParent) return
+    this.setPane(line <= 0 ? 0 : this.lineToY(line))
+    if (line > 0 && tries > 1) {
+      requestAnimationFrame(() =>
+        setTimeout(() => {
+          if (Math.abs(this.previewTopLine() - line) > 0.5) this.scrollPreviewToLine(line, tries - 1)
+        }),
+      )
+    }
+  }
+
+  private editorLineY(line: number): number {
+    const doc = this.view.state.doc
+    const n = Math.min(Math.floor(line) + 1, doc.lines)
+    const blk = this.view.lineBlockAt(doc.line(n).from)
+    return blk.top + (line - Math.floor(line)) * blk.height + this.docOffset()
   }
 
   private lineToY(line: number): number {
@@ -91,13 +134,7 @@ export class ScrollSync {
     let target: number
     if (p.scrollTop <= 0) target = 0
     else if (p.scrollTop + p.clientHeight >= p.scrollHeight - 2) target = s.scrollHeight
-    else {
-      const line = this.yToLine(p.scrollTop)
-      const doc = this.view.state.doc
-      const n = Math.min(Math.floor(line) + 1, doc.lines)
-      const blk = this.view.lineBlockAt(doc.line(n).from)
-      target = blk.top + (line - Math.floor(line)) * blk.height + this.docOffset()
-    }
+    else target = this.editorLineY(this.yToLine(p.scrollTop))
     if (Math.abs(s.scrollTop - target) > 1) {
       this.ignoreEditor = true
       s.scrollTop = target

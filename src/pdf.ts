@@ -41,6 +41,22 @@ interface OutlineItem {
 
 const THUMB_WIDTH = 120 // CSS-пиксели
 
+// последний масштаб, выставленный пользователем: с ним открываются PDF без сохранённой позиции
+const lastScale = {
+  get(): string | null {
+    try {
+      return localStorage.getItem('pdfScale')
+    } catch {
+      return null
+    }
+  },
+  set(v: string) {
+    try {
+      localStorage.setItem('pdfScale', v)
+    } catch {}
+  },
+}
+
 export class PdfReader {
   private bus = new EventBus()
   private link = new PDFLinkService({ eventBus: this.bus })
@@ -51,6 +67,7 @@ export class PdfReader {
   private posKey = ''
   private restore: SavedPos | null = null
   private saveTimer = 0
+  private applyingSaved = false // масштаб ставит программа, а не пользователь
   hasOutline = false
   // миниатюры рисуются по одной за раз и только видимые в панели
   private thumbObserver: IntersectionObserver
@@ -72,7 +89,8 @@ export class PdfReader {
     this.bus.on('pagesinit', () => {
       const pos = this.restore
       this.restore = null
-      this.viewer.currentScaleValue = pos?.scale ?? 'page-width'
+      this.viewer.currentScaleValue = pos?.scale ?? lastScale.get() ?? 'page-width'
+      this.applyingSaved = false
       if (pos && pos.page <= this.viewer.pagesCount) {
         const div = this.viewer.getPageView(pos.page - 1).div
         ui.container.scrollTop = div.offsetTop + pos.frac * div.clientHeight
@@ -84,6 +102,7 @@ export class PdfReader {
     })
     this.bus.on('scalechanging', ({ scale, presetValue }: { scale: number; presetValue?: string }) => {
       this.showScale(scale, presetValue)
+      if (!this.applyingSaved) lastScale.set(this.viewer.currentScaleValue)
       this.savePosSoon()
     })
     const showCount = ({ matchesCount, state }: { matchesCount: { current: number; total: number }; state?: number }) => {
@@ -152,6 +171,7 @@ export class PdfReader {
 
   async open(data: ArrayBuffer) {
     await this.close()
+    const size = data.byteLength // буфер уходит в воркер и обнуляется
     const task = pdfjsLib.getDocument({
       data,
       cMapUrl: `${ASSETS}cmaps/`,
@@ -168,8 +188,11 @@ export class PdfReader {
     this.task = task
     const doc = await task.promise
     this.doc = doc
-    this.posKey = `pdfpos:${doc.fingerprints[0]}`
+    // одна программа может записать одинаковый ID в разные PDF, поэтому
+    // отпечаток дополняем числом страниц и размером файла
+    this.posKey = `pdfpos:${doc.fingerprints[0]}:${doc.numPages}:${size}`
     this.restore = (await kvGet<SavedPos>(this.posKey)) ?? null
+    this.applyingSaved = true // до pagesinit масштаб выставляет просмотрщик
     this.ui.pageCount.textContent = String(doc.numPages)
     this.ui.page.max = String(doc.numPages)
     this.ui.page.value = '1'

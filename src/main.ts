@@ -60,8 +60,11 @@ interface PdfDoc {
 }
 let pdf: PdfDoc | null = null
 
-const editor = createEditor(editorPane, onChange, () => sync.onEditorScroll())
-const preview = new Preview(previewEl, () => sync.syncFromEditor(), () => scheduleRender())
+const editor = createEditor(editorPane, onChange, () => {
+  sync.onEditorScroll()
+  saveViewSoon()
+})
+const preview = new Preview(previewEl, onPreviewRendered, () => scheduleRender())
 const sync = new ScrollSync(editor.view, previewPane, previewEl)
 const tree = new FileTree($('tree'), (handle, path) => void openFromTree(handle, path))
 
@@ -132,6 +135,116 @@ function saveDraftSoon() {
   draftTimer = setTimeout(saveDraftNow, 500)
 }
 
+// --- Положение и масштаб заметок ----------------------------------------------
+// Для каждого файла запоминаются строка у верхнего края, курсор и масштаб текста.
+
+interface ViewState {
+  line: number
+  cursor: number
+  zoom: number
+}
+
+const ZOOMS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3]
+const zoomBtn = $('btn-zoom')
+let zoom = 1
+let viewKey: string | null = null // ключ состояния текущего документа в IndexedDB
+let viewSeq = 0
+let viewReady = false // до первой загрузки документа позицию брать неоткуда
+let pendingLine: number | null = null // ждёт отрисовки превью
+let lineBeforePdf = 0
+
+/** Строка исходника у верхнего края видимой панели. */
+function topLine() {
+  return mode === 'preview' ? sync.previewTopLine() : sync.editorTopLine()
+}
+
+/** Прокрутить видимые панели к строке; если превью ещё рендерится, докрутим в onPreviewRendered. */
+function restoreLine(line: number) {
+  pendingLine = line
+  requestAnimationFrame(() => {
+    if (mode !== 'preview') sync.scrollEditorToLine(line)
+    if (pendingLine !== line) return
+    if (mode === 'editor') pendingLine = null
+    else if (!previewStale && !preview.busy) {
+      sync.scrollPreviewToLine(line)
+      pendingLine = null
+    }
+  })
+}
+
+function onPreviewRendered() {
+  if (pendingLine === null) return sync.syncFromEditor()
+  if (mode !== 'editor' && !preview.busy) {
+    sync.scrollPreviewToLine(pendingLine)
+    pendingLine = null
+  }
+}
+
+async function viewKeyFor(handle: FileSystemFileHandle | null, path: string | null, name: string): Promise<string> {
+  // getUniqueId (Chromium) узнаёт файл даже после переименования и вне открытой папки
+  const h = handle as (FileSystemFileHandle & { getUniqueId?: () => Promise<string> }) | null
+  if (h?.getUniqueId) {
+    try {
+      return `view:id:${await h.getUniqueId()}`
+    } catch {}
+  }
+  if (path && tree.root) return `view:path:${tree.root.name}/${path}`
+  return `view:name:${name}`
+}
+
+let viewTimer = 0
+function saveViewSoon() {
+  clearTimeout(viewTimer)
+  viewTimer = setTimeout(saveViewNow, 400)
+}
+function saveViewNow() {
+  clearTimeout(viewTimer)
+  if (!viewKey || pdf || pendingLine !== null) return
+  void kvSet(viewKey, { line: topLine(), cursor: editor.cursor(), zoom } satisfies ViewState)
+}
+
+/** Вернуть сохранённые позицию и масштаб документа, загруженного в редактор. */
+async function restoreView() {
+  const seq = ++viewSeq
+  viewKey = null
+  const key = await viewKeyFor(doc.handle, doc.path, doc.name)
+  const state = await kvGet<ViewState>(key)
+  if (seq !== viewSeq) return // пока читали, открыли другой документ
+  viewKey = key
+  applyZoom(state?.zoom ?? defaultZoom())
+  if (state) {
+    editor.setCursor(state.cursor)
+    restoreLine(state.line)
+  }
+}
+
+function defaultZoom() {
+  const z = parseFloat(store.get('mdZoom') ?? '')
+  return z >= ZOOMS[0] && z <= ZOOMS[ZOOMS.length - 1] ? z : 1
+}
+
+function applyZoom(z: number) {
+  zoom = z
+  app.style.setProperty('--zoom', String(z))
+  zoomBtn.textContent = `${Math.round(z * 100)}%`
+  zoomBtn.classList.toggle('changed', z !== 1)
+  editor.view.requestMeasure()
+}
+
+/** Масштаб, выставленный пользователем: держим позицию и запоминаем выбор. */
+function changeZoom(z: number) {
+  const line = viewReady && !pdf ? topLine() : null
+  applyZoom(z)
+  if (line !== null) restoreLine(line)
+  store.set('mdZoom', String(z))
+  saveViewSoon()
+}
+
+function stepZoom(dir: 1 | -1) {
+  const next = dir > 0 ? ZOOMS.find((v) => v > zoom + 1e-3) : [...ZOOMS].reverse().find((v) => v < zoom - 1e-3)
+  if (next) changeZoom(next)
+}
+
 function onChange() {
   if (!doc.dirty) {
     doc.dirty = true
@@ -139,6 +252,7 @@ function onChange() {
   }
   scheduleRender()
   saveDraftSoon()
+  saveViewSoon()
   updateStatsSoon()
 }
 
@@ -164,6 +278,8 @@ function assetResolver(filePath: string) {
 }
 
 function loadDoc(text: string, name: string, handle: FileSystemFileHandle | null, path: string | null, cursor = 0, dirty = false) {
+  saveViewNow() // позиция предыдущего документа
+  pendingLine = null
   editor.setValue(text, cursor)
   Object.assign(doc, { name, handle, path, dirty })
   tree.setActive(path)
@@ -173,6 +289,7 @@ function loadDoc(text: string, name: string, handle: FileSystemFileHandle | null
   previewPane.scrollTop = 0
   scheduleRender()
   saveDraftSoon()
+  void restoreView()
 }
 
 const confirmDiscard = () => !doc.dirty || confirm('Есть несохранённые изменения. Отбросить их?')
@@ -286,6 +403,10 @@ function setPdfTab(tab: string) {
 }
 
 async function openPdf(file: File, handle: FileSystemFileHandle | null, path: string | null) {
+  if (!pdf) {
+    saveViewNow()
+    lineBeforePdf = topLine() // скрытые панели теряют прокрутку
+  }
   const me: PdfDoc = { name: file.name, path, handle }
   pdf = me
   setKind('pdf')
@@ -322,6 +443,7 @@ function closePdf() {
   updateTitle()
   editor.view.requestMeasure()
   if (previewStale) scheduleRender()
+  restoreLine(lineBeforePdf)
 }
 
 $('pdf-close').onclick = closePdf
@@ -395,6 +517,8 @@ const store = {
 }
 
 function setMode(m: string) {
+  // строка, которую видно сейчас, должна остаться наверху и в новом режиме
+  const line = viewReady && !pdf && m !== mode ? topLine() : null
   mode = m
   app.dataset.mode = m
   for (const b of document.querySelectorAll<HTMLElement>('#mode-switch button')) b.classList.toggle('on', b.dataset.mode === m)
@@ -402,6 +526,7 @@ function setMode(m: string) {
   editor.view.requestMeasure()
   if (m !== 'editor' && previewStale) doRender()
   if (m === 'editor') editor.view.focus()
+  if (line !== null) restoreLine(line)
 }
 
 function setSidebar(show: boolean) {
@@ -447,6 +572,24 @@ $('mode-switch').onclick = (e) => {
   if (m) setMode(m)
 }
 initTheme($('btn-theme'))
+zoomBtn.onclick = () => changeZoom(1)
+previewPane.addEventListener('scroll', saveViewSoon, { passive: true })
+
+// Ctrl+колесо: масштаб текста заметки (у PDF свой обработчик)
+let wheelAcc = 0
+app.addEventListener(
+  'wheel',
+  (e) => {
+    if (pdf || !(e.ctrlKey || e.metaKey)) return
+    e.preventDefault()
+    wheelAcc += e.deltaY
+    if (Math.abs(wheelAcc) >= 60) {
+      stepZoom(wheelAcc < 0 ? 1 : -1)
+      wheelAcc = 0
+    }
+  },
+  { passive: false },
+)
 
 // --- Ширина текста превью ---
 
@@ -514,7 +657,16 @@ window.addEventListener(
     const mod = e.ctrlKey || e.metaKey
     const k = e.key.toLowerCase()
     if (pdf && handlePdfKey(e, mod, k)) return
-    if (mod && !e.altKey && k === 's') {
+    if (mod && !e.altKey && (e.code === 'Equal' || e.code === 'NumpadAdd')) {
+      e.preventDefault()
+      stepZoom(1)
+    } else if (mod && !e.altKey && (e.code === 'Minus' || e.code === 'NumpadSubtract')) {
+      e.preventDefault()
+      stepZoom(-1)
+    } else if (mod && !e.altKey && (e.code === 'Digit0' || e.code === 'Numpad0')) {
+      e.preventDefault()
+      changeZoom(1)
+    } else if (mod && !e.altKey && k === 's') {
       e.preventDefault()
       save(e.shiftKey)
     } else if (mod && !e.altKey && !e.shiftKey && k === 'o') {
@@ -592,11 +744,15 @@ window.addEventListener('drop', async (e) => {
 
 window.addEventListener('beforeunload', (e) => {
   saveDraftNow()
+  saveViewNow()
   // текст в черновике не потеряется, но файл на диске останется старым
   if (doc.dirty && doc.handle) e.preventDefault()
 })
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') saveDraftNow()
+  if (document.visibilityState === 'hidden') {
+    saveDraftNow()
+    saveViewNow()
+  }
 })
 
 // --- Старт ---------------------------------------------------------------------
@@ -630,6 +786,7 @@ async function init() {
 
   if (draft) loadDoc(draft.text, draft.name, draft.handle ?? null, draft.path, draft.cursor, draft.dirty)
   else loadDoc(WELCOME, 'welcome.md', null, null)
+  viewReady = true
   editor.view.focus()
 
   // последний открытый PDF, если браузер ещё помнит разрешение на чтение

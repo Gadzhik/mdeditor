@@ -77,6 +77,11 @@ export class Preview {
     for (const b of this.blocks) b.html = ''
   }
 
+  /** true, пока воркер готовит новую версию превью. */
+  get busy() {
+    return this.inFlight
+  }
+
   render(text: string) {
     if (this.inFlight) this.queued = text
     else this.post(text)

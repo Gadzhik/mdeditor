@@ -2,7 +2,6 @@
   --font-ui: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace;
   --font-read: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  --editor-font-size: 14.5px;
 
   --c-bg: #ffffff;
   --c-bg-alt: #f6f7f9;
@@ -129,6 +128,8 @@ button.icon { padding: 4px 8px; font-size: 16px; line-height: 1; }
   min-width: 0;
 }
 .spacer { flex: 1; }
+#btn-zoom { color: var(--c-muted); font-size: 12px; font-variant-numeric: tabular-nums; padding: 4px 6px; }
+#btn-zoom.changed { color: var(--c-fg); }
 #stats { color: var(--c-muted); font-size: 12px; margin-right: 8px; white-space: nowrap; }
 .seg { display: flex; border: 1px solid var(--c-border); border-radius: 7px; padding: 1px; }
 .seg button { border-radius: 5px; padding: 3px 10px; }
@@ -161,6 +162,8 @@ button.icon { padding: 4px 8px; font-size: 16px; line-height: 1; }
 /* --- Раскладка --- */
 #app {
   --split: 0.5;
+  --zoom: 1; /* масштаб текста заметки, ставится из main.ts */
+  --editor-font-size: calc(14.5px * var(--zoom));
   flex: 1;
   display: flex;
   min-height: 0;
@@ -246,7 +249,7 @@ button.icon { padding: 4px 8px; font-size: 16px; line-height: 1; }
   max-width: var(--read-width, 1200px); /* задаётся ползунком на панели */
   margin: 0 auto;
   padding: 24px 32px 64px;
-  font: 16px/1.65 var(--font-read);
+  font: calc(16px * var(--zoom, 1)) / 1.65 var(--font-read);
   word-wrap: break-word;
 }
 .markdown-body h1, .markdown-body h2, .markdown-body h3,
@@ -358,6 +361,7 @@ body[data-kind='pdf'] #preview-pane,
 body[data-kind='pdf'] #btn-save,
 body[data-kind='pdf'] #mode-switch,
 body[data-kind='pdf'] #width-ctl,
+body[data-kind='pdf'] #btn-zoom,
 body[data-kind='pdf'] #stats { display: none; }
 
 #pdf-pane { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; }
