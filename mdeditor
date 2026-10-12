@@ -31,6 +31,9 @@ MIME_TYPES=(text/markdown text/x-markdown application/pdf)
 die() { echo "mdeditor: $*" >&2; notify "$*"; exit 1; }
 notify() { command -v notify-send >/dev/null && notify-send -a "MD Editor" "MD Editor" "$1" || true; }
 
+# запуск в отдельной сессии: процесс не завершится вместе со скриптом и терминалом
+detach() { setsid -f "$@" >/dev/null 2>&1 </dev/null; }
+
 server_up() { curl -fs --max-time 1 "$URL" 2>/dev/null | grep -q '<title>MD Editor'; }
 
 ensure_built() {
@@ -54,10 +57,13 @@ start_server() {
   fi
   mkdir -p "$RUN_DIR"
   cd "$APP_DIR"
-  nohup node_modules/.bin/vite preview --port "$PORT" --strictPort --host 127.0.0.1 >"$LOG_FILE" 2>&1 &
-  echo $! >"$PID_FILE"
+  setsid -f node_modules/.bin/vite preview --port "$PORT" --strictPort --host 127.0.0.1 >"$LOG_FILE" 2>&1 </dev/null
   for _ in $(seq 50); do
-    server_up && return 0
+    if server_up; then
+      # setsid -f не возвращает PID, поэтому находим процесс по порту
+      pgrep -f "vite preview --port $PORT " | head -n 1 >"$PID_FILE"
+      return 0
+    fi
     sleep 0.1
   done
   die "сервер не запустился, см. $LOG_FILE"
@@ -78,16 +84,16 @@ open_window() {
   # установленное приложение — его окно; иначе отдельное окно Chromium без вкладок
   local pwa; pwa=$(pwa_desktop)
   if [[ -n "$pwa" ]] && command -v gio >/dev/null; then
-    gio launch "$pwa" >/dev/null 2>&1 &
+    detach gio launch "$pwa"
     return
   fi
   for b in chromium google-chrome-stable google-chrome brave brave-browser microsoft-edge-stable vivaldi; do
     if command -v "$b" >/dev/null; then
-      nohup "$b" --app="$URL" >/dev/null 2>&1 &
+      detach "$b" --app="$URL"
       return
     fi
   done
-  xdg-open "$URL" >/dev/null 2>&1 &
+  detach xdg-open "$URL"
 }
 
 stop_server() {
@@ -130,7 +136,7 @@ set_default() {
     [[ -n "$b" ]] || die "нужен браузер на Chromium (Chromium, Chrome, Brave, Edge)"
     ensure_built; start_server
     # установка доступна в обычном окне браузера, а не в окне --app
-    nohup "$b" --new-window "$URL" >/dev/null 2>&1 &
+    detach "$b" --new-window "$URL"
     echo "Сначала установите MD Editor как приложение. В открывшемся окне браузера"
     echo "нажмите кнопку «Установить» на панели редактора (или значок установки"
     echo "в адресной строке), а затем снова выполните:"
