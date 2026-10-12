@@ -2,8 +2,9 @@ import './styles.css'
 import { createEditor } from './editor'
 import { Preview } from './preview'
 import { ScrollSync } from './scrollsync'
-import { kvGet, kvSet, type Draft } from './storage'
-import { canPickDirectory, ensurePermission, openFile, pickDirectory, readHandle, saveFileAs, writeFile } from './files'
+import { kvDel, kvGet, kvSet, type Draft } from './storage'
+import { canPickDirectory, ensurePermission, isPdf, openFile, pickDirectory, saveFileAs, writeFile } from './files'
+import type { PdfReader } from './pdf'
 import { FileTree, getFileByPath, resolvePath } from './tree'
 import { initTheme } from './theme'
 
@@ -25,7 +26,7 @@ const WELCOME = `# MD Editor
 - **Alt+1 / Alt+2 / Alt+3**: редактор / split / режим чтения
 - **Ctrl+\\\\**: боковая панель с деревом папки
 - **Ctrl+B / Ctrl+I**: жирный / курсив, **Ctrl+F**: поиск
-- Перетащите \`.md\` файл или папку в окно, чтобы открыть
+- Перетащите \`.md\` или \`.pdf\` файл либо папку в окно, чтобы открыть
 
 Черновик сохраняется автоматически.
 
@@ -51,12 +52,26 @@ const doc = {
   dirty: false,
 }
 
+/** Открытый PDF. Markdown-документ при этом остаётся загруженным под ним. */
+interface PdfDoc {
+  name: string
+  path: string | null
+  handle: FileSystemFileHandle | null
+}
+let pdf: PdfDoc | null = null
+
 const editor = createEditor(editorPane, onChange, () => sync.onEditorScroll())
 const preview = new Preview(previewEl, () => sync.syncFromEditor(), () => scheduleRender())
 const sync = new ScrollSync(editor.view, previewPane, previewEl)
 const tree = new FileTree($('tree'), (handle, path) => void openFromTree(handle, path))
 
 function updateTitle() {
+  if (pdf) {
+    filenameEl.textContent = pdf.path ?? pdf.name
+    filenameEl.title = 'PDF, только чтение'
+    document.title = `${pdf.name} — MD Editor`
+    return
+  }
   const dot = doc.dirty ? '● ' : ''
   filenameEl.textContent = dot + (doc.path ?? doc.name)
   filenameEl.title = doc.handle ? 'Связан с файлом на диске' : 'Не сохранён на диск'
@@ -163,13 +178,22 @@ function loadDoc(text: string, name: string, handle: FileSystemFileHandle | null
 const confirmDiscard = () => !doc.dirty || confirm('Есть несохранённые изменения. Отбросить их?')
 
 async function openFromTree(handle: FileSystemFileHandle, path: string) {
-  if (path === doc.path || !confirmDiscard()) return
+  if (pdf && path === doc.path) return closePdf() // заметка уже загружена под PDF
+  if (path === (pdf ? pdf.path : doc.path)) return
   try {
-    const f = await readHandle(handle)
-    loadDoc(f.text, f.name, handle, path)
+    await openAny(await handle.getFile(), handle, path)
   } catch (e) {
     toast(`Не удалось открыть: ${(e as Error).message}`)
   }
+}
+
+/** Единая точка открытия: PDF показывается в читалке, остальное в редакторе. */
+async function openAny(file: File, handle: FileSystemFileHandle | null, path: string | null) {
+  if (isPdf(file.name)) return openPdf(file, handle, path)
+  if (!confirmDiscard()) return
+  const text = await file.text()
+  closePdf()
+  loadDoc(text, file.name, handle, path)
 }
 
 /** Путь файла внутри открытой папки, если он в ней лежит. */
@@ -179,16 +203,16 @@ async function pathInFolder(handle: FileSystemFileHandle): Promise<string | null
 }
 
 async function openFileDialog() {
-  if (!confirmDiscard()) return
   try {
     const f = await openFile()
-    if (f) loadDoc(f.text, f.name, f.handle, f.handle ? await pathInFolder(f.handle) : null)
+    if (f) await openAny(f.file, f.handle, f.handle ? await pathInFolder(f.handle) : null)
   } catch (e) {
     toast(`Не удалось открыть: ${(e as Error).message}`)
   }
 }
 
 async function save(as = false) {
+  if (pdf) return
   const text = editor.getValue()
   try {
     if (!as && doc.handle) {
@@ -214,7 +238,94 @@ async function save(as = false) {
 }
 
 function newDoc() {
-  if (confirmDiscard()) loadDoc('', 'untitled.md', null, null)
+  if (!confirmDiscard()) return
+  closePdf()
+  loadDoc('', 'untitled.md', null, null)
+}
+
+// --- PDF -----------------------------------------------------------------------
+
+const pdfPane = $('pdf-pane')
+const pdfOutline = $('pdf-outline')
+let readerPromise: Promise<PdfReader> | null = null
+
+/** pdf.js (~1 МБ) загружается только при первом открытии PDF. */
+function getReader() {
+  readerPromise ??= import('./pdf').then(
+    ({ PdfReader }) =>
+      new PdfReader({
+        container: $<HTMLDivElement>('pdf-container'),
+        viewer: $<HTMLDivElement>('pdf-viewer'),
+        outline: pdfOutline,
+        page: $<HTMLInputElement>('pdf-page'),
+        pageCount: $('pdf-count'),
+        scale: $<HTMLSelectElement>('pdf-scale'),
+        find: $<HTMLInputElement>('pdf-find'),
+        findCount: $('pdf-find-count'),
+      }),
+  )
+  return readerPromise
+}
+
+function setKind(kind: 'md' | 'pdf') {
+  document.body.dataset.kind = kind
+  pdfPane.hidden = kind !== 'pdf'
+}
+
+function showOutline(show: boolean) {
+  pdfOutline.hidden = !show
+  $('pdf-btn-outline').classList.toggle('on', show)
+}
+
+async function openPdf(file: File, handle: FileSystemFileHandle | null, path: string | null) {
+  const me: PdfDoc = { name: file.name, path, handle }
+  pdf = me
+  setKind('pdf')
+  tree.setActive(path)
+  updateTitle()
+  $('pdf-loading').hidden = false
+  try {
+    const reader = await getReader()
+    await reader.open(await file.arrayBuffer())
+    if (pdf !== me) return
+    showOutline(reader.hasOutline && store.get('pdfOutline') !== '0')
+    // без handle (fallback-открытие) PDF после перезагрузки не вернуть
+    if (handle) kvSet('lastPdf', me)
+    else kvDel('lastPdf')
+  } catch (e) {
+    if (pdf !== me) return
+    closePdf()
+    toast(`Не удалось открыть PDF: ${(e as Error).message}`)
+  } finally {
+    if (pdf === me) $('pdf-loading').hidden = true
+  }
+}
+
+function closePdf() {
+  if (!pdf) return
+  pdf = null
+  readerPromise?.then((r) => r.close())
+  kvDel('lastPdf')
+  setKind('md')
+  tree.setActive(doc.path)
+  updateTitle()
+  editor.view.requestMeasure()
+  if (previewStale) scheduleRender()
+}
+
+$('pdf-close').onclick = closePdf
+$('pdf-zoom-in').onclick = () => getReader().then((r) => r.zoomIn())
+$('pdf-zoom-out').onclick = () => getReader().then((r) => r.zoomOut())
+$('pdf-find-next').onclick = () => getReader().then((r) => r.search(false, true))
+$('pdf-find-prev').onclick = () => getReader().then((r) => r.search(true, true))
+$('pdf-btn-outline').onclick = () => {
+  const show = !!pdfOutline.hidden
+  showOutline(show)
+  store.set('pdfOutline', show ? '1' : '0')
+}
+$('pdf-invert').onclick = () => {
+  const on = pdfPane.classList.toggle('invert')
+  store.set('pdfInvert', on ? '1' : '0')
 }
 
 // --- Папка ---------------------------------------------------------------------
@@ -230,9 +341,10 @@ async function openFolder(dir: FileSystemDirectoryHandle) {
   setSidebar(true)
   kvSet('dir', dir)
   await tree.load(dir)
-  // текущий документ мог оказаться внутри новой папки
+  // текущие документы могли оказаться внутри новой папки
   doc.path = doc.handle ? await pathInFolder(doc.handle) : null
-  tree.setActive(doc.path)
+  if (pdf) pdf.path = pdf.handle ? await pathInFolder(pdf.handle) : null
+  tree.setActive(pdf ? pdf.path : doc.path)
   preview.setAssetResolver(doc.path ? assetResolver(doc.path) : null)
   updateTitle()
   scheduleRender()
@@ -360,11 +472,31 @@ function stepReadWidth(dir: -1 | 1) {
   setReadWidth(next)
 }
 
+/** Клавиши читалки PDF. true — событие обработано. */
+function handlePdfKey(e: KeyboardEvent, mod: boolean, k: string): boolean {
+  const run = (fn: (r: PdfReader) => void) => {
+    e.preventDefault()
+    getReader().then(fn)
+    return true
+  }
+  if (mod && !e.altKey && k === 'f') return run((r) => r.focusFind())
+  if (mod && !e.altKey && (e.code === 'Equal' || e.code === 'NumpadAdd')) return run((r) => r.zoomIn())
+  if (mod && !e.altKey && (e.code === 'Minus' || e.code === 'NumpadSubtract')) return run((r) => r.zoomOut())
+  if (mod && !e.altKey && (e.code === 'Digit0' || e.code === 'Numpad0')) return run((r) => r.zoomReset())
+  // сохранять нечего, режимы редактора к PDF не относятся
+  if ((mod && !e.altKey && k === 's') || (e.altKey && !mod && /^Digit[123]$/.test(e.code))) {
+    e.preventDefault()
+    return true
+  }
+  return false
+}
+
 window.addEventListener(
   'keydown',
   (e) => {
     const mod = e.ctrlKey || e.metaKey
     const k = e.key.toLowerCase()
+    if (pdf && handlePdfKey(e, mod, k)) return
     if (mod && !e.altKey && k === 's') {
       e.preventDefault()
       save(e.shiftKey)
@@ -430,13 +562,11 @@ window.addEventListener('drop', async (e) => {
   try {
     const handle = await handlePromise
     if (handle?.kind === 'directory') return void (await openFolder(handle as FileSystemDirectoryHandle))
-    if (!confirmDiscard()) return
     if (handle) {
       const fh = handle as FileSystemFileHandle
-      const f = await readHandle(fh)
-      loadDoc(f.text, f.name, fh, await pathInFolder(fh))
+      await openAny(await fh.getFile(), fh, await pathInFolder(fh))
     } else if (file) {
-      loadDoc(await file.text(), file.name, null, null)
+      await openAny(file, null, null)
     }
   } catch (e) {
     toast(`Не удалось открыть: ${(e as Error).message}`)
@@ -462,6 +592,8 @@ async function init() {
   setMode(store.get('mode') ?? 'split')
   setSidebar(store.get('sidebar') === '1')
   if (!canPickDirectory) $('btn-folder').hidden = true
+  if (store.get('pdfInvert') === '0') pdfPane.classList.remove('invert')
+  setKind('md')
 
   const [draft, dir] = await Promise.all([kvGet<Draft>('draft'), kvGet<FileSystemDirectoryHandle>('dir')])
 
@@ -482,6 +614,16 @@ async function init() {
   if (draft) loadDoc(draft.text, draft.name, draft.handle ?? null, draft.path, draft.cursor, draft.dirty)
   else loadDoc(WELCOME, 'welcome.md', null, null)
   editor.view.focus()
+
+  // последний открытый PDF, если браузер ещё помнит разрешение на чтение
+  const last = await kvGet<PdfDoc>('lastPdf')
+  if (last?.handle && (await ensurePermission(last.handle, 'read', false))) {
+    try {
+      await openPdf(await last.handle.getFile(), last.handle, last.path)
+    } catch {
+      kvDel('lastPdf')
+    }
+  }
 }
 
 init()

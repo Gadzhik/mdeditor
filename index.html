@@ -42,8 +42,50 @@
       <section id="editor-pane"></section>
       <div id="divider" title="Перетащите, чтобы изменить ширину"></div>
       <article id="preview-pane"><div id="preview" class="markdown-body"></div></article>
+      <section id="pdf-pane" class="invert" hidden>
+        <div id="pdf-toolbar">
+          <button id="pdf-btn-outline" title="Оглавление">Оглавление</button>
+          <span class="pdf-pages">
+            <input id="pdf-page" type="number" min="1" value="1" title="Номер страницы" />
+            <span>/</span>
+            <span id="pdf-count">0</span>
+          </span>
+          <span class="pdf-zoom">
+            <button id="pdf-zoom-out" class="icon" title="Уменьшить (Ctrl+−)">−</button>
+            <select id="pdf-scale" title="Масштаб">
+              <option value="page-width">По ширине</option>
+              <option value="page-fit">Страница целиком</option>
+              <option value="0.5">50%</option>
+              <option value="0.75">75%</option>
+              <option value="1">100%</option>
+              <option value="1.25">125%</option>
+              <option value="1.5">150%</option>
+              <option value="2">200%</option>
+              <option value="3">300%</option>
+              <option data-custom hidden></option>
+            </select>
+            <button id="pdf-zoom-in" class="icon" title="Увеличить (Ctrl+=)">+</button>
+          </span>
+          <span class="spacer"></span>
+          <span class="pdf-find">
+            <input id="pdf-find" type="search" placeholder="Поиск (Ctrl+F)" />
+            <span id="pdf-find-count"></span>
+            <button id="pdf-find-prev" class="icon" title="Предыдущее (Shift+Enter)">↑</button>
+            <button id="pdf-find-next" class="icon" title="Следующее (Enter)">↓</button>
+          </span>
+          <button id="pdf-invert" class="icon" title="Инвертировать страницы в тёмной теме">◑</button>
+          <button id="pdf-close" class="icon" title="Закрыть PDF и вернуться к заметке">✕</button>
+        </div>
+        <div id="pdf-body">
+          <nav id="pdf-outline"></nav>
+          <div id="pdf-main">
+            <div id="pdf-container" tabindex="0"><div id="pdf-viewer" class="pdfViewer"></div></div>
+            <div id="pdf-loading" hidden>Загрузка…</div>
+          </div>
+        </div>
+      </section>
     </main>
-    <div id="dropzone" hidden><div>Отпустите файл или папку, чтобы открыть</div></div>
+    <div id="dropzone" hidden><div>Отпустите файл (.md, .pdf) или папку, чтобы открыть</div></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

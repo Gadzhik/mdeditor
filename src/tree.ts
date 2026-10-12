@@ -1,4 +1,4 @@
-// Боковая панель: дерево markdown-файлов из открытой папки.
+// Боковая панель: дерево markdown- и PDF-файлов из открытой папки.
 
 export interface TreeNode {
   name: string
@@ -7,7 +7,7 @@ export interface TreeNode {
   children?: TreeNode[]
 }
 
-const MD_RE = /\.(md|markdown|mdown|mkd)$/i
+const DOC_RE = /\.(md|markdown|mdown|mkd|pdf)$/i
 const SKIP = new Set(['node_modules', '.git', 'dist', 'build', 'target', '.venv', 'venv', '__pycache__'])
 const MAX_DEPTH = 10
 
@@ -20,7 +20,7 @@ async function scan(dir: FileSystemDirectoryHandle, prefix: string, depth: numbe
       if (depth >= MAX_DEPTH || h.name.startsWith('.') || SKIP.has(h.name)) continue
       const dh = h as FileSystemDirectoryHandle
       dirs.push(scan(dh, path + '/', depth + 1).then((children) => (children.length ? { name: h.name, path, handle: dh, children } : null)))
-    } else if (MD_RE.test(h.name)) {
+    } else if (DOC_RE.test(h.name)) {
       files.push({ name: h.name, path, handle: h as FileSystemFileHandle })
     }
   }
@@ -56,7 +56,7 @@ export class FileTree {
     this.nodes.clear()
     this.el.textContent = ''
     if (!tree.length) {
-      this.el.textContent = 'Markdown-файлов не найдено'
+      this.el.textContent = 'Markdown- и PDF-файлов не найдено'
       return
     }
     this.el.appendChild(this.renderList(tree))
@@ -77,7 +77,8 @@ export class FileTree {
         const a = document.createElement('a')
         a.href = '#'
         a.dataset.path = n.path
-        a.textContent = n.name.replace(MD_RE, '')
+        a.textContent = n.name.replace(DOC_RE, '')
+        if (/\.pdf$/i.test(n.name)) a.dataset.kind = 'pdf'
         a.title = n.path
         this.items.set(n.path, a)
         this.nodes.set(n.path, n)

@@ -1,8 +1,7 @@
 // File System Access API (Chrome/Edge) с fallback на <input type=file> и скачивание.
 
 export interface OpenedFile {
-  name: string
-  text: string
+  file: File
   handle: FileSystemFileHandle | null
 }
 
@@ -15,6 +14,10 @@ interface FSAWindow {
 const w = window as unknown as FSAWindow
 
 const mdTypes = [{ description: 'Markdown', accept: { 'text/markdown': ['.md', '.markdown', '.mdown', '.txt'] } }]
+// один общий фильтр: при нескольких Chrome показывает только первый
+const openTypes = [{ description: 'Markdown и PDF', accept: { 'text/markdown': ['.md', '.markdown', '.mdown', '.txt'], 'application/pdf': ['.pdf'] } }]
+
+export const isPdf = (name: string) => /\.pdf$/i.test(name)
 
 export const canPickDirectory = typeof w.showDirectoryPicker === 'function'
 
@@ -23,7 +26,7 @@ const isAbort = (e: unknown) => e instanceof DOMException && e.name === 'AbortEr
 export async function openFile(): Promise<OpenedFile | null> {
   if (w.showOpenFilePicker) {
     try {
-      const [handle] = await w.showOpenFilePicker({ types: mdTypes })
+      const [handle] = await w.showOpenFilePicker({ types: openTypes })
       return readHandle(handle)
     } catch (e) {
       if (isAbort(e)) return null
@@ -33,10 +36,10 @@ export async function openFile(): Promise<OpenedFile | null> {
   return new Promise((resolve) => {
     const input = document.createElement('input')
     input.type = 'file'
-    input.accept = '.md,.markdown,.mdown,.txt,text/markdown,text/plain'
-    input.onchange = async () => {
+    input.accept = '.md,.markdown,.mdown,.txt,.pdf,text/markdown,text/plain,application/pdf'
+    input.onchange = () => {
       const f = input.files?.[0]
-      resolve(f ? { name: f.name, text: await f.text(), handle: null } : null)
+      resolve(f ? { file: f, handle: null } : null)
     }
     input.oncancel = () => resolve(null)
     input.click()
@@ -44,8 +47,7 @@ export async function openFile(): Promise<OpenedFile | null> {
 }
 
 export async function readHandle(handle: FileSystemFileHandle): Promise<OpenedFile> {
-  const f = await handle.getFile()
-  return { name: f.name, text: await f.text(), handle }
+  return { file: await handle.getFile(), handle }
 }
 
 type PermHandle = FileSystemHandle & {

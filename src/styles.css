@@ -350,3 +350,109 @@ button.icon { padding: 4px 8px; font-size: 16px; line-height: 1; }
   10%, 80% { opacity: 1; transform: translate(-50%, 0); }
   100% { opacity: 0; }
 }
+
+/* --- PDF --- */
+body[data-kind='pdf'] #editor-pane,
+body[data-kind='pdf'] #divider,
+body[data-kind='pdf'] #preview-pane,
+body[data-kind='pdf'] #btn-save,
+body[data-kind='pdf'] #mode-switch,
+body[data-kind='pdf'] #width-ctl,
+body[data-kind='pdf'] #stats { display: none; }
+
+#pdf-pane { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; }
+#pdf-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--c-border);
+  background: var(--c-bg-alt);
+  flex: none;
+  overflow-x: auto;
+}
+#pdf-toolbar input, #pdf-toolbar select {
+  font: inherit;
+  color: inherit;
+  background: var(--c-bg);
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  padding: 3px 6px;
+}
+#pdf-btn-outline.on { background: var(--c-border); }
+.pdf-pages { display: flex; align-items: center; gap: 4px; color: var(--c-muted); white-space: nowrap; }
+#pdf-page { width: 4.5em; text-align: right; -moz-appearance: textfield; }
+#pdf-page::-webkit-inner-spin-button { display: none; }
+.pdf-zoom, .pdf-find { display: flex; align-items: center; gap: 2px; }
+#pdf-find { width: 200px; }
+#pdf-find-count { min-width: 4em; text-align: center; color: var(--c-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+
+#pdf-body { flex: 1; display: flex; min-height: 0; }
+#pdf-outline {
+  width: 260px;
+  flex: none;
+  overflow: auto;
+  padding: 6px 0;
+  border-right: 1px solid var(--c-border);
+  background: var(--c-bg-alt);
+  color: var(--c-muted);
+  font-size: 13px;
+}
+#pdf-outline:not(:has(ul)) { padding: 10px 12px; }
+#pdf-outline ul { list-style: none; margin: 0; padding: 0 0 0 12px; }
+#pdf-outline > ul { padding-left: 4px; }
+#pdf-outline summary { display: flex; align-items: center; list-style: none; cursor: pointer; }
+#pdf-outline summary::-webkit-details-marker { display: none; }
+#pdf-outline summary::before { content: '▸'; width: 1em; flex: none; padding-left: 4px; transition: transform 0.1s; }
+#pdf-outline details[open] > summary::before { transform: rotate(90deg); }
+#pdf-outline button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 3px 8px;
+  color: var(--c-fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#pdf-outline summary button { padding-left: 2px; }
+
+#pdf-main { flex: 1; position: relative; min-width: 0; background: var(--c-bg-alt); }
+/* PDFViewer требует абсолютно позиционированный контейнер */
+#pdf-container { position: absolute; inset: 0; overflow: auto; outline: none; }
+#pdf-loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--c-muted);
+  background: var(--c-bg-alt);
+}
+#pdf-pane .pdfViewer { padding: 12px 0; }
+#pdf-pane .pdfViewer .page { box-shadow: 0 1px 6px rgb(0 0 0 / 0.18); border: 0; margin: 0 auto 12px; }
+
+/* инверсия страниц и кнопка инверсии имеют смысл только в тёмной теме */
+#pdf-invert { display: none; }
+:root[data-theme='dark'] #pdf-invert { display: inline-block; }
+:root[data-theme='dark'] #pdf-pane.invert .page canvas { filter: invert(0.9) hue-rotate(180deg); }
+:root[data-theme='dark'] #pdf-pane.invert #pdf-invert { background: var(--c-border); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) #pdf-invert { display: inline-block; }
+  :root:not([data-theme='light']) #pdf-pane.invert .page canvas { filter: invert(0.9) hue-rotate(180deg); }
+  :root:not([data-theme='light']) #pdf-pane.invert #pdf-invert { background: var(--c-border); }
+}
+
+#tree a[data-kind='pdf']::after {
+  content: 'PDF';
+  margin-left: 6px;
+  padding: 0 4px;
+  font-size: 10px;
+  border-radius: 3px;
+  color: var(--c-muted);
+  border: 1px solid var(--c-border);
+}
+
+@media (max-width: 760px) {
+  #pdf-outline { position: absolute; z-index: 5; height: 100%; box-shadow: 4px 0 12px rgb(0 0 0 / 0.15); }
+  #pdf-body { position: relative; }
+  #pdf-find { width: 120px; }
+}
