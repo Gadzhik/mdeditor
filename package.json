@@ -1,7 +1,22 @@
 {
   "name": "mdeditor",
-  "private": true,
   "version": "0.1.0",
+  "description": "Fast in-browser Markdown editor and PDF reader with notes on text",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Gadzhik/mdeditor.git"
+  },
+  "keywords": [
+    "markdown",
+    "editor",
+    "pdf",
+    "reader",
+    "notes",
+    "codemirror",
+    "pdfjs"
+  ],
+  "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",

@@ -122,6 +122,16 @@ export class PdfReader {
     this.bus.on('updatefindcontrolstate', showCount)
 
     ui.container.addEventListener('scroll', () => this.savePosSoon(), { passive: true })
+    // «По ширине» и «Страница целиком» пересчитываются при изменении области просмотра
+    // (открыли панель заметок, изменили окно), иначе страница обрезается
+    let resizeFrame = 0
+    new ResizeObserver(() => {
+      cancelAnimationFrame(resizeFrame)
+      resizeFrame = requestAnimationFrame(() => {
+        const v = this.viewer.currentScaleValue
+        if (this.doc && this.viewer.pagesCount && ['page-width', 'page-fit', 'auto'].includes(v)) this.viewer.currentScaleValue = v
+      })
+    }).observe(ui.container)
     // Ctrl+колесо: масштаб относительно курсора, а не масштаб всей страницы браузера
     ui.container.addEventListener(
       'wheel',
