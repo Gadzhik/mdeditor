@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+# MD Editor: запуск одной командой.
+#
+#   ./mdeditor            собрать (если нужно), запустить сервер и открыть окно редактора
+#   ./mdeditor serve      только запустить сервер и вывести адрес (открыть в любом браузере)
+#   ./mdeditor stop       остановить фоновый сервер
+#   ./mdeditor status     показать, запущен ли сервер
+#   ./mdeditor install    добавить ярлык в меню приложений (и команду mdeditor в ~/.local/bin)
+#   ./mdeditor uninstall  убрать ярлык и команду
+#
+# Порт можно сменить переменной MDEDITOR_PORT (по умолчанию 4317).
+
+set -euo pipefail
+
+APP_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+PORT="${MDEDITOR_PORT:-4317}"
+URL="http://localhost:$PORT/"
+RUN_DIR="${XDG_RUNTIME_DIR:-/tmp}/mdeditor-$USER"
+PID_FILE="$RUN_DIR/server.pid"
+LOG_FILE="$RUN_DIR/server.log"
+DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+DESKTOP_FILE="$DATA_HOME/applications/mdeditor.desktop"
+ICON_FILE="$DATA_HOME/icons/hicolor/scalable/apps/mdeditor.svg"
+BIN_LINK="$HOME/.local/bin/mdeditor"
+
+die() { echo "mdeditor: $*" >&2; notify "$*"; exit 1; }
+notify() { command -v notify-send >/dev/null && notify-send -a "MD Editor" "MD Editor" "$1" || true; }
+
+server_up() { curl -fs --max-time 1 "$URL" 2>/dev/null | grep -q '<title>MD Editor'; }
+
+ensure_built() {
+  command -v node >/dev/null || die "не найден Node.js (нужна версия 20+)"
+  cd "$APP_DIR"
+  if [[ ! -d node_modules ]]; then
+    echo "Устанавливаю зависимости…"
+    npm install --no-fund --no-audit
+  fi
+  # пересобираем, только если исходники новее сборки
+  if [[ ! -f dist/index.html ]] || [[ -n "$(find src index.html vite.config.ts package.json -newer dist/index.html -print -quit)" ]]; then
+    echo "Собираю…"
+    npm run build --silent >/dev/null || die "сборка не удалась, запустите 'npm run build' в $APP_DIR"
+  fi
+}
+
+start_server() {
+  server_up && return 0
+  if curl -fs --max-time 1 "$URL" >/dev/null 2>&1; then
+    die "порт $PORT занят другим приложением; задайте другой: MDEDITOR_PORT=4318 $0"
+  fi
+  mkdir -p "$RUN_DIR"
+  cd "$APP_DIR"
+  nohup node_modules/.bin/vite preview --port "$PORT" --strictPort --host 127.0.0.1 >"$LOG_FILE" 2>&1 &
+  echo $! >"$PID_FILE"
+  for _ in $(seq 50); do
+    server_up && return 0
+    sleep 0.1
+  done
+  die "сервер не запустился, см. $LOG_FILE"
+}
+
+open_window() {
+  # Chromium-браузеры: отдельное окно без вкладок и полная работа с файлами на диске
+  for b in chromium google-chrome-stable google-chrome brave brave-browser microsoft-edge-stable vivaldi; do
+    if command -v "$b" >/dev/null; then
+      nohup "$b" --app="$URL" >/dev/null 2>&1 &
+      return
+    fi
+  done
+  xdg-open "$URL" >/dev/null 2>&1 &
+}
+
+stop_server() {
+  if [[ -f "$PID_FILE" ]] && kill "$(cat "$PID_FILE")" 2>/dev/null; then
+    rm -f "$PID_FILE"
+    echo "Сервер остановлен"
+  else
+    rm -f "$PID_FILE"
+    echo "Сервер не запущен"
+  fi
+}
+
+install_shortcut() {
+  mkdir -p "$(dirname "$DESKTOP_FILE")" "$(dirname "$ICON_FILE")" "$(dirname "$BIN_LINK")"
+  cat >"$ICON_FILE" <<'SVG'
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="12" fill="#2b3240"/><path d="M12 46V18h7l6 9 6-9h7v28h-7V30l-6 9-6-9v16zm40 0-9-11h6V18h6v17h6z" fill="#fff"/></svg>
+SVG
+  cat >"$DESKTOP_FILE" <<EOF
+[Desktop Entry]
+Type=Application
+Name=MD Editor
+Comment=Markdown-редактор и ридер
+Exec="$APP_DIR/mdeditor"
+Icon=$ICON_FILE
+Terminal=false
+Categories=Utility;TextEditor;
+Keywords=markdown;md;editor;notes;
+EOF
+  ln -sf "$APP_DIR/mdeditor" "$BIN_LINK"
+  command -v update-desktop-database >/dev/null && update-desktop-database "$(dirname "$DESKTOP_FILE")" 2>/dev/null || true
+  echo "Ярлык: $DESKTOP_FILE"
+  echo "Команда: $BIN_LINK"
+  [[ ":$PATH:" == *":$HOME/.local/bin:"* ]] || echo "Внимание: ~/.local/bin нет в PATH"
+}
+
+uninstall_shortcut() {
+  rm -f "$DESKTOP_FILE" "$ICON_FILE" "$BIN_LINK"
+  echo "Ярлык и команда удалены"
+}
+
+case "${1:-}" in
+  "" | open) ensure_built; start_server; open_window ;;
+  serve) ensure_built; start_server; echo "$URL" ;;
+  stop) stop_server ;;
+  status) server_up && echo "Запущен: $URL" || echo "Не запущен" ;;
+  install) ensure_built; install_shortcut ;;
+  uninstall) uninstall_shortcut ;;
+  -h | --help | help) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *) die "неизвестная команда '$1', см. $0 --help" ;;
+esac

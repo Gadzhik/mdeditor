@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MD Editor</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23333'/%3E%3Cpath d='M6 22V10h3l3 4 3-4h3v12h-3v-7l-3 4-3-4v7zm17 0-4-5h3v-7h2v7h3z' fill='%23fff'/%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <header id="toolbar">
+      <button id="btn-sidebar" class="icon" title="Боковая панель (Ctrl+\)">☰</button>
+      <button id="btn-new" title="Новый документ">Новый</button>
+      <button id="btn-open" title="Открыть файл (Ctrl+O)">Открыть</button>
+      <button id="btn-folder" title="Открыть папку">Папка</button>
+      <button id="btn-save" title="Сохранить (Ctrl+S), сохранить как (Ctrl+Shift+S)">Сохранить</button>
+      <span id="filename"></span>
+      <span class="spacer"></span>
+      <span id="stats"></span>
+      <div class="seg" id="mode-switch">
+        <button data-mode="editor" title="Только редактор (Alt+1)">Редактор</button>
+        <button data-mode="split" title="Редактор и превью (Alt+2)">Split</button>
+        <button data-mode="preview" title="Режим чтения (Alt+3)">Чтение</button>
+      </div>
+      <div id="width-ctl">
+        <button id="btn-width" class="icon" title="Ширина текста (Alt+[ / Alt+])">↔</button>
+        <div id="width-pop" hidden>
+          <div class="row"><span>Ширина текста</span><output id="width-val"></output></div>
+          <input type="range" id="width-range" min="500" max="2000" step="20" />
+          <label class="row"><input type="checkbox" id="width-full" /> Во всю ширину</label>
+        </div>
+      </div>
+      <button id="btn-theme" title="Тема"></button>
+    </header>
+    <main id="app" data-mode="split">
+      <aside id="sidebar" hidden>
+        <div id="sidebar-head">
+          <span id="folder-name">Папка не открыта</span>
+          <button id="btn-restore" hidden>Восстановить доступ</button>
+        </div>
+        <nav id="tree"></nav>
+      </aside>
+      <section id="editor-pane"></section>
+      <div id="divider" title="Перетащите, чтобы изменить ширину"></div>
+      <article id="preview-pane"><div id="preview" class="markdown-body"></div></article>
+    </main>
+    <div id="dropzone" hidden><div>Отпустите файл или папку, чтобы открыть</div></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
