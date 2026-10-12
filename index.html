@@ -96,6 +96,15 @@
       <aside id="notes-panel" hidden>
         <div id="notes-head">
           <span>Заметки</span>
+          <span class="spacer"></span>
+          <div id="notes-export-wrap">
+            <button id="notes-export" title="Экспорт заметок в Markdown">Экспорт</button>
+            <div id="notes-export-menu" hidden>
+              <button data-export="file">Сохранить в файл .md</button>
+              <button data-export="copy">Скопировать как Markdown</button>
+              <button data-export="open">Открыть в редакторе</button>
+            </div>
+          </div>
           <button id="notes-close" class="icon" title="Скрыть панель">✕</button>
         </div>
         <div id="notes-list"></div>

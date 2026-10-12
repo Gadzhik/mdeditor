@@ -724,6 +724,42 @@ function showNotesPanel(show: boolean) {
 $('btn-notes').onclick = () => showNotesPanel(!!notesPanel.hidden)
 $('notes-close').onclick = () => showNotesPanel(false)
 
+// --- Экспорт заметок в Markdown ---
+
+const exportMenu = $('notes-export-menu')
+$('notes-export').onclick = () => {
+  if (!notesUI.notes.length) return toast('У этого документа нет заметок')
+  exportMenu.hidden = !exportMenu.hidden
+}
+document.addEventListener('pointerdown', (e) => {
+  if (!exportMenu.hidden && !$('notes-export-wrap').contains(e.target as Node)) exportMenu.hidden = true
+})
+exportMenu.onclick = async (e) => {
+  const action = (e.target as HTMLElement).closest<HTMLElement>('[data-export]')?.dataset.export
+  if (!action) return
+  exportMenu.hidden = true
+  flushNotes() // позиции после последних правок
+  const docName = pdf ? pdf.name : doc.name
+  const md = notesUI.toMarkdown(docName)
+  const fileName = `${docName.replace(/\.(md|markdown|mdown|mkd)$/i, '')}.notes.md`
+  try {
+    if (action === 'copy') {
+      await navigator.clipboard.writeText(md)
+      toast('Заметки скопированы')
+    } else if (action === 'file') {
+      const r = await saveFileAs(fileName, md)
+      if (r) toast(r === 'downloaded' ? `Файл ${fileName} скачан` : `Сохранено в ${r.name}`)
+    } else if (action === 'open') {
+      if (!confirmDiscard()) return
+      closePdf()
+      // новый несохранённый документ: можно дописать и сохранить через Ctrl+S
+      loadDoc(md, fileName, null, null, 0, true)
+    }
+  } catch (err) {
+    toast(`Не удалось экспортировать: ${(err as Error).message}`)
+  }
+}
+
 // --- Папка ---------------------------------------------------------------------
 
 const folderName = $('folder-name')

@@ -626,3 +626,23 @@ button.primary:hover { background: var(--c-accent); filter: brightness(1.1); }
   #notes-panel { position: absolute; right: 0; z-index: 6; height: 100%; box-shadow: -4px 0 12px rgb(0 0 0 / 0.15); }
   #app { position: relative; }
 }
+
+#notes-head .spacer { flex: 1; }
+#notes-head { gap: 4px; }
+#notes-export { font-size: 12px; font-weight: 400; padding: 3px 8px; border: 1px solid var(--c-border); }
+#notes-export-wrap { position: relative; font-weight: 400; }
+#notes-export-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 20;
+  min-width: 220px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  background: var(--c-bg);
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgb(0 0 0 / 0.15);
+}
+#notes-export-menu button { text-align: left; font-size: 13px; padding: 6px 10px; }

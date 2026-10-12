@@ -119,6 +119,9 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getEleme
 /** Цитата для показа: у markdown без разметки (в привязке хранится кусок исходника). */
 const shownQuote = (a: Anchor) => (a.kind === 'md' ? plain(a.quote).text.trim() : a.quote)
 
+/** Экранировать то, что markdown понял бы как разметку (цитаты из PDF бывают с * и _). */
+const escapeMd = (s: string) => s.replace(/([\\`*_[\]<>|~])/g, '\\$1').replace(/^(\s*)([#+-]|\d+\.)(\s)/gm, '$1\\$2$3')
+
 const fmtDate = (iso: string) =>
   new Date(iso).toLocaleString('ru', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 
@@ -216,6 +219,24 @@ export class NotesUI {
       item.append(meta)
       this.list.appendChild(item)
     }
+  }
+
+  /** Все заметки документа в Markdown, в том же порядке, что и в панели. */
+  toMarkdown(docName: string): string {
+    const sorted = this.notes.map((n) => ({ n, loc: this.hooks.locate(n) })).sort((a, b) => a.loc.order - b.loc.order)
+    const count = sorted.length
+    const word = count % 10 === 1 && count % 100 !== 11 ? 'заметка' : [2, 3, 4].includes(count % 10) && ![12, 13, 14].includes(count % 100) ? 'заметки' : 'заметок'
+    const out = [`# Заметки: ${escapeMd(docName)}`, '', `_${count} ${word}, экспорт ${fmtDate(new Date().toISOString())}_`, '']
+    for (const { n, loc } of sorted) {
+      out.push(`## ${loc.label}`, '')
+      const quote = shownQuote(n.anchor).replace(/\s+/g, ' ').trim()
+      out.push(`> ${escapeMd(quote)}`, '')
+      if (this.hooks.isOrphan(n)) out.push('_(фрагмент не найден в тексте)_', '')
+      // текст заметки — уже markdown, вставляем как есть
+      if (n.text) out.push(n.text, '')
+      out.push(`<sub>${fmtDate(n.updated)}</sub>`, '')
+    }
+    return out.join('\n')
   }
 
   /** Новая заметка к выделенному фрагменту. */
