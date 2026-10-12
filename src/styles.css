@@ -493,3 +493,136 @@ body[data-kind='pdf'] #stats { display: none; }
   #pdf-body { position: relative; }
   #pdf-find { width: 120px; }
 }
+
+/* --- Заметки к тексту --- */
+#notes-count:not(:empty) {
+  margin-left: 5px;
+  padding: 0 6px;
+  border-radius: 9px;
+  font-size: 11px;
+  background: var(--c-accent);
+  color: #fff;
+}
+#btn-notes.on { background: var(--c-border); }
+
+#notes-panel {
+  width: 300px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-left: 1px solid var(--c-border);
+  background: var(--c-bg-alt);
+}
+#notes-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--c-border);
+}
+#notes-list { flex: 1; overflow: auto; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+#notes-where { padding: 8px 12px; font-size: 11px; color: var(--c-muted); border-top: 1px solid var(--c-border); }
+.notes-empty { color: var(--c-muted); font-size: 13px; margin: 8px 4px; line-height: 1.5; }
+.note-item {
+  position: relative;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--c-bg);
+  border: 1px solid var(--c-border);
+  cursor: pointer;
+  font-size: 13px;
+}
+.note-item:hover { border-color: var(--c-accent); }
+.note-quote {
+  padding-left: 8px;
+  border-left: 3px solid var(--c-note-mark);
+  color: var(--c-muted);
+  font-style: italic;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.note-text { margin-top: 6px; white-space: pre-wrap; word-break: break-word; }
+.note-meta { margin-top: 6px; font-size: 11px; color: var(--c-muted); display: flex; flex-wrap: wrap; align-items: center; gap: 0 4px; }
+.note-acts {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 6px;
+  background: var(--c-bg);
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.15);
+  visibility: hidden;
+}
+.note-item:hover .note-acts, .note-item:focus-within .note-acts { visibility: visible; }
+.note-acts button { font-size: 11px; padding: 1px 6px; }
+.note-item.orphan .note-quote { border-left-color: var(--c-border); }
+.note-orphan { color: var(--h-keyword); }
+
+#note-add {
+  position: fixed;
+  z-index: 30;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: var(--c-fg);
+  color: var(--c-bg);
+  font-size: 13px;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.25);
+}
+#note-add:hover { background: var(--c-accent); color: #fff; }
+
+#note-pop {
+  position: fixed;
+  z-index: 31;
+  width: min(380px, calc(100vw - 16px));
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--c-bg);
+  border: 1px solid var(--c-border);
+  border-radius: 10px;
+  box-shadow: 0 10px 32px rgb(0 0 0 / 0.25);
+}
+#note-pop-quote {
+  margin: 0;
+  padding-left: 8px;
+  border-left: 3px solid var(--c-note-mark);
+  color: var(--c-muted);
+  font-style: italic;
+  font-size: 13px;
+  max-height: 6em;
+  overflow: auto;
+}
+#note-pop-text {
+  font: 14px/1.5 var(--font-ui);
+  color: inherit;
+  background: var(--c-bg-alt);
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  resize: vertical;
+}
+.note-pop-row { display: flex; gap: 6px; align-items: center; }
+#note-pop-del { color: var(--h-keyword); }
+button.primary { background: var(--c-accent); color: #fff; }
+button.primary:hover { background: var(--c-accent); filter: brightness(1.1); }
+
+/* подсветка фрагментов */
+:root { --c-note: rgb(255 208 0 / 0.32); --c-note-active: rgb(255 140 0 / 0.55); --c-note-mark: rgb(230 170 0); }
+::highlight(note) { background-color: var(--c-note); }
+::highlight(note-active) { background-color: var(--c-note-active); }
+.cm-note { background-color: var(--c-note); border-bottom: 2px solid var(--c-note-mark); }
+.note-layer { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
+.note-hl { position: absolute; background: var(--c-note); border-radius: 2px; transition: background-color 0.3s; }
+.note-hl.flash { background: var(--c-note-active); }
+
+@media (max-width: 760px) {
+  #notes-panel { position: absolute; right: 0; z-index: 6; height: 100%; box-shadow: -4px 0 12px rgb(0 0 0 / 0.15); }
+  #app { position: relative; }
+}

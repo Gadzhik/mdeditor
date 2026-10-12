@@ -1,5 +1,5 @@
 import './styles.css'
-import { createEditor } from './editor'
+import { createEditor, type NoteRange } from './editor'
 import { Preview } from './preview'
 import { ScrollSync } from './scrollsync'
 import { kvDel, kvGet, kvSet, type Draft } from './storage'
@@ -7,6 +7,8 @@ import { canPickDirectory, ensurePermission, isPdf, openFile, pickDirectory, sav
 import type { PdfReader } from './pdf'
 import { FileTree, getFileByPath, resolvePath } from './tree'
 import { initTheme } from './theme'
+import { NotesUI, loadNotes, saveNotes, sidecarName, type Anchor, type MdAnchor, type Note, type NotesTarget, type PdfAnchor } from './notes'
+import { caretAt, previewIndex, previewSelection, resolveInSource } from './anchor'
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T
 
@@ -63,6 +65,7 @@ let pdf: PdfDoc | null = null
 const editor = createEditor(editorPane, onChange, () => {
   sync.onEditorScroll()
   saveViewSoon()
+  scheduleAddButton()
 })
 const preview = new Preview(previewEl, onPreviewRendered, () => scheduleRender())
 const sync = new ScrollSync(editor.view, previewPane, previewEl)
@@ -173,6 +176,7 @@ function restoreLine(line: number) {
 }
 
 function onPreviewRendered() {
+  highlightPreview()
   if (pendingLine === null) return sync.syncFromEditor()
   if (mode !== 'editor' && !preview.busy) {
     sync.scrollPreviewToLine(pendingLine)
@@ -253,6 +257,7 @@ function onChange() {
   scheduleRender()
   saveDraftSoon()
   saveViewSoon()
+  notesSyncSoon()
   updateStatsSoon()
 }
 
@@ -279,6 +284,7 @@ function assetResolver(filePath: string) {
 
 function loadDoc(text: string, name: string, handle: FileSystemFileHandle | null, path: string | null, cursor = 0, dirty = false) {
   saveViewNow() // позиция предыдущего документа
+  flushNotes()
   pendingLine = null
   editor.setValue(text, cursor)
   Object.assign(doc, { name, handle, path, dirty })
@@ -290,6 +296,7 @@ function loadDoc(text: string, name: string, handle: FileSystemFileHandle | null
   scheduleRender()
   saveDraftSoon()
   void restoreView()
+  void reloadNotes()
 }
 
 const confirmDiscard = () => !doc.dirty || confirm('Есть несохранённые изменения. Отбросить их?')
@@ -368,9 +375,8 @@ let readerPromise: Promise<PdfReader> | null = null
 
 /** pdf.js (~1 МБ) загружается только при первом открытии PDF. */
 function getReader() {
-  readerPromise ??= import('./pdf').then(
-    ({ PdfReader }) =>
-      new PdfReader({
+  readerPromise ??= import('./pdf').then(({ PdfReader }) => {
+    const r = new PdfReader({
         container: $<HTMLDivElement>('pdf-container'),
         viewer: $<HTMLDivElement>('pdf-viewer'),
         outline: $('pdf-outline'),
@@ -380,8 +386,11 @@ function getReader() {
         scale: $<HTMLSelectElement>('pdf-scale'),
         find: $<HTMLInputElement>('pdf-find'),
         findCount: $('pdf-find-count'),
-      }),
-  )
+      })
+    r.onNoteClick = (id, near) => notesUI.edit(id, near)
+    readerInstance = r
+    return r
+  })
   return readerPromise
 }
 
@@ -405,6 +414,7 @@ function setPdfTab(tab: string) {
 async function openPdf(file: File, handle: FileSystemFileHandle | null, path: string | null) {
   if (!pdf) {
     saveViewNow()
+    flushNotes()
     lineBeforePdf = topLine() // скрытые панели теряют прокрутку
   }
   const me: PdfDoc = { name: file.name, path, handle }
@@ -424,6 +434,7 @@ async function openPdf(file: File, handle: FileSystemFileHandle | null, path: st
     // без handle (fallback-открытие) PDF после перезагрузки не вернуть
     if (handle) kvSet('lastPdf', me)
     else kvDel('lastPdf')
+    void reloadNotes()
   } catch (e) {
     if (pdf !== me) return
     closePdf()
@@ -444,6 +455,7 @@ function closePdf() {
   editor.view.requestMeasure()
   if (previewStale) scheduleRender()
   restoreLine(lineBeforePdf)
+  void reloadNotes()
 }
 
 $('pdf-close').onclick = closePdf
@@ -467,6 +479,251 @@ $('pdf-invert').onclick = () => {
   store.set('pdfInvert', on ? '1' : '0')
 }
 
+// --- Заметки к тексту ----------------------------------------------------------
+// Хранятся в <файл>.notes.json рядом с документом (если открыта папка), иначе в браузере.
+
+let readerInstance: PdfReader | null = null
+let notesTarget: NotesTarget | null = null
+let notesSeq = 0
+const orphans = new Set<string>() // заметки, чей фрагмент не найден в тексте
+const previewNoteRanges = new Map<string, Range>()
+const supportsHighlights = typeof Highlight !== 'undefined' && 'highlights' in CSS
+const isMdNote = (n: Note): n is Note & { anchor: MdAnchor } => n.anchor.kind === 'md'
+const isPdfNote = (n: Note): n is Note & { anchor: PdfAnchor } => n.anchor.kind === 'pdf'
+
+const notesUI = new NotesUI({
+  reveal: revealNote,
+  locate(n) {
+    if (n.anchor.kind === 'pdf') return { label: `стр. ${n.anchor.page}`, order: n.anchor.page + (n.anchor.rects[0]?.y ?? 0) }
+    const r = editor.noteRanges().find((x) => x.id === n.id)
+    const line = r ? editor.view.state.doc.lineAt(r.from).number - 1 : n.anchor.line
+    return { label: `строка ${line + 1}`, order: r ? r.from : 1e12 + n.anchor.line }
+  },
+  isOrphan: (n) => orphans.has(n.id),
+  changed() {
+    syncMdAnchors()
+    applyNotes(true)
+    void persistNotes(true)
+  },
+})
+
+async function parentDir(path: string): Promise<FileSystemDirectoryHandle | null> {
+  let dir = tree.root
+  if (!dir) return null
+  try {
+    for (const seg of path.split('/').slice(0, -1)) dir = await dir.getDirectoryHandle(seg)
+    return dir
+  } catch {
+    return null
+  }
+}
+
+/** Загрузить заметки показанного документа (PDF или markdown). */
+async function reloadNotes() {
+  const seq = ++notesSeq
+  const cur = pdf
+  let target: NotesTarget
+  if (cur) {
+    const reader = await getReader()
+    target = { dir: cur.path ? await parentDir(cur.path) : null, fileName: cur.name, fallbackKey: `notes:pdf:${reader.docKey}` }
+  } else {
+    const key = await viewKeyFor(doc.handle, doc.path, doc.name)
+    target = { dir: doc.path ? await parentDir(doc.path) : null, fileName: doc.name, fallbackKey: key.replace(/^view:/, 'notes:') }
+  }
+  const list = await loadNotes(target)
+  if (seq !== notesSeq) return // пока читали, открыли другой документ
+  notesTarget = target
+  notesUI.set(
+    list,
+    target.dir
+      ? `Хранятся в файле ${sidecarName(target.fileName)} рядом с документом`
+      : 'Хранятся в этом браузере. Откройте папку с документом, чтобы они сохранялись в файл рядом с ним',
+  )
+  applyNotes(true)
+}
+
+/** resolve — заново найти фрагменты заметок в тексте (после загрузки или изменения списка). */
+function applyNotes(resolve: boolean) {
+  const list = notesUI.notes
+  if (pdf) {
+    orphans.clear()
+    readerInstance?.setNotes(list.filter(isPdfNote).map((n) => ({ id: n.id, title: n.text, rects: n.anchor.rects })))
+  } else if (resolve) {
+    const md = list.filter(isMdNote)
+    const found = resolveInSource(editor.getValue(), md.map((n) => n.anchor))
+    orphans.clear()
+    const ranges: NoteRange[] = []
+    md.forEach((n, i) => {
+      const r = found[i]
+      if (r) ranges.push({ id: n.id, from: r.from, to: r.to, title: n.text })
+      else orphans.add(n.id)
+    })
+    editor.setNoteRanges(ranges)
+    highlightPreview()
+  }
+  notesUI.render()
+}
+
+/** Подсветка в превью через CSS Custom Highlight API: DOM не меняется, патчи превью ей не мешают. */
+function highlightPreview() {
+  previewNoteRanges.clear()
+  if (!supportsHighlights) return
+  const live = pdf ? [] : editor.noteRanges()
+  if (!live.length) return void CSS.highlights.delete('note')
+  const idx = previewIndex(previewEl)
+  const st = editor.view.state
+  for (const r of live) {
+    // ищем по актуальному тексту фрагмента из редактора
+    const range = idx.find({
+      kind: 'md',
+      line: st.doc.lineAt(r.from).number - 1,
+      quote: st.sliceDoc(r.from, r.to),
+      prefix: st.sliceDoc(Math.max(0, r.from - 60), r.from),
+      suffix: st.sliceDoc(r.to, r.to + 60),
+    })
+    if (range) previewNoteRanges.set(r.id, range)
+  }
+  CSS.highlights.set('note', new Highlight(...previewNoteRanges.values()))
+}
+
+/** Перенести сдвинутые правками позиции заметок в их привязки. true — что-то изменилось. */
+function syncMdAnchors(): boolean {
+  if (pdf) return false
+  const st = editor.view.state
+  const live = new Map(editor.noteRanges().map((r) => [r.id, r]))
+  let changed = false
+  for (const n of notesUI.notes) {
+    if (!isMdNote(n)) continue
+    const r = live.get(n.id)
+    if (!r) {
+      orphans.add(n.id) // фрагмент удалён целиком; привязку не трогаем
+      continue
+    }
+    const quote = st.sliceDoc(r.from, r.to)
+    const line = st.doc.lineAt(r.from).number - 1
+    if (quote === n.anchor.quote && line === n.anchor.line) continue
+    n.anchor = { kind: 'md', line, quote, prefix: st.sliceDoc(Math.max(0, r.from - 60), r.from), suffix: st.sliceDoc(r.to, r.to + 60) }
+    changed = true
+  }
+  return changed
+}
+
+let notesTimer = 0
+function notesSyncSoon() {
+  if (!notesUI.notes.length) return
+  clearTimeout(notesTimer)
+  notesTimer = setTimeout(flushNotes, 1500)
+}
+function flushNotes() {
+  clearTimeout(notesTimer)
+  if (!notesUI.notes.length || pdf) return
+  if (syncMdAnchors()) void persistNotes(false)
+  notesUI.render()
+}
+
+async function persistNotes(interactive: boolean) {
+  const t = notesTarget
+  if (!t) return
+  try {
+    const where = await saveNotes(t, notesUI.notes, interactive)
+    if (where === 'browser' && t.dir) toast('Нет доступа к папке: заметки сохранены в браузере')
+  } catch (e) {
+    toast(`Не удалось сохранить заметки: ${(e as Error).message}`)
+  }
+}
+
+function revealNote(n: Note) {
+  if (n.anchor.kind === 'pdf') return readerInstance?.revealNote(n.id, n.anchor.rects)
+  const r = editor.noteRanges().find((x) => x.id === n.id)
+  if (!r) return toast('Фрагмент этой заметки не найден в тексте')
+  if (mode === 'preview') sync.scrollPreviewToLine(Math.max(0, editor.view.state.doc.lineAt(r.from).number - 4))
+  else editor.reveal(r.from, r.to) // в Split превью подтянется синхронным скроллом
+  const range = previewNoteRanges.get(n.id)
+  if (range && supportsHighlights) {
+    CSS.highlights.set('note-active', new Highlight(range))
+    setTimeout(() => CSS.highlights.delete('note-active'), 1600)
+  }
+}
+
+/** Выделенный сейчас фрагмент: в PDF, в превью или в редакторе. */
+function currentSelection(): { anchor: Anchor; rect: DOMRect } | null {
+  if (pdf) return readerInstance?.selection() ?? null
+  const inPreview = previewSelection(previewEl)
+  if (inPreview) return inPreview
+  const v = editor.view
+  const sel = v.state.selection.main
+  if (mode === 'preview' || sel.empty || !v.hasFocus) return null
+  const a = v.coordsAtPos(sel.from)
+  const b = v.coordsAtPos(sel.to)
+  if (!a || !b) return null
+  const st = v.state
+  return {
+    anchor: {
+      kind: 'md',
+      line: st.doc.lineAt(sel.from).number - 1,
+      quote: st.sliceDoc(sel.from, sel.to),
+      prefix: st.sliceDoc(Math.max(0, sel.from - 60), sel.from),
+      suffix: st.sliceDoc(sel.to, sel.to + 60),
+    },
+    rect: new DOMRect(Math.min(a.left, b.left), Math.min(a.top, b.top), Math.abs(b.right - a.left), Math.max(a.bottom, b.bottom) - Math.min(a.top, b.top)),
+  }
+}
+
+function addFromSelection() {
+  const s = currentSelection()
+  if (!s) return toast('Сначала выделите фрагмент текста')
+  addBtn.hidden = true
+  notesUI.create(s.anchor, s.rect)
+}
+
+// кнопка «＋ Заметка» рядом с выделением
+const addBtn = $('note-add')
+let addFrame = 0
+function scheduleAddButton() {
+  cancelAnimationFrame(addFrame)
+  addFrame = requestAnimationFrame(updateAddButton)
+}
+function updateAddButton() {
+  const s = notesUI.isEditing ? null : currentSelection()
+  if (!s) return void (addBtn.hidden = true)
+  addBtn.hidden = false
+  const w = addBtn.offsetWidth
+  const left = Math.max(8, Math.min(s.rect.right - w / 2, innerWidth - w - 8))
+  const top = s.rect.bottom + 44 < innerHeight ? s.rect.bottom + 8 : Math.max(8, s.rect.top - 40)
+  addBtn.style.left = `${left}px`
+  addBtn.style.top = `${top}px`
+}
+document.addEventListener('selectionchange', scheduleAddButton)
+document.addEventListener('scroll', scheduleAddButton, { capture: true, passive: true })
+// pointerdown + preventDefault: иначе клик по кнопке сбросит выделение
+addBtn.addEventListener('pointerdown', (e) => {
+  e.preventDefault()
+  addFromSelection()
+})
+
+// клик по подсвеченному фрагменту в превью открывает заметку
+previewEl.addEventListener('click', (e) => {
+  if (!previewNoteRanges.size || (e.target as Element).closest('a') || !getSelection()?.isCollapsed) return
+  const p = caretAt(e.clientX, e.clientY)
+  if (!p) return
+  for (const [id, r] of previewNoteRanges) {
+    try {
+      if (r.isPointInRange(p.node, p.offset)) return notesUI.edit(id, r.getBoundingClientRect())
+    } catch {
+      // узел из другого документа или уже удалён
+    }
+  }
+})
+
+const notesPanel = $('notes-panel')
+function showNotesPanel(show: boolean) {
+  notesPanel.hidden = !show
+  $('btn-notes').classList.toggle('on', show)
+  store.set('notesPanel', show ? '1' : '0')
+}
+$('btn-notes').onclick = () => showNotesPanel(!!notesPanel.hidden)
+$('notes-close').onclick = () => showNotesPanel(false)
+
 // --- Папка ---------------------------------------------------------------------
 
 const folderName = $('folder-name')
@@ -487,6 +744,7 @@ async function openFolder(dir: FileSystemDirectoryHandle) {
   preview.setAssetResolver(doc.path ? assetResolver(doc.path) : null)
   updateTitle()
   scheduleRender()
+  void reloadNotes() // теперь заметки можно хранить в файле рядом с документом
 }
 
 async function openFolderDialog() {
@@ -656,6 +914,10 @@ window.addEventListener(
   (e) => {
     const mod = e.ctrlKey || e.metaKey
     const k = e.key.toLowerCase()
+    if (e.altKey && !mod && !e.shiftKey && e.code === 'KeyN') {
+      e.preventDefault()
+      return addFromSelection()
+    }
     if (pdf && handlePdfKey(e, mod, k)) return
     if (mod && !e.altKey && (e.code === 'Equal' || e.code === 'NumpadAdd')) {
       e.preventDefault()
@@ -745,6 +1007,7 @@ window.addEventListener('drop', async (e) => {
 window.addEventListener('beforeunload', (e) => {
   saveDraftNow()
   saveViewNow()
+  flushNotes()
   // текст в черновике не потеряется, но файл на диске останется старым
   if (doc.dirty && doc.handle) e.preventDefault()
 })
@@ -764,6 +1027,7 @@ async function init() {
   setReadWidth(savedWidth === 0 || savedWidth >= 500 ? savedWidth : DEFAULT_WIDTH)
   setMode(store.get('mode') ?? 'split')
   setSidebar(store.get('sidebar') === '1')
+  showNotesPanel(store.get('notesPanel') === '1')
   if (!canPickDirectory) $('btn-folder').hidden = true
   if (store.get('pdfInvert') === '0') pdfPane.classList.remove('invert')
   setKind('md')

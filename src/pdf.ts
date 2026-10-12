@@ -4,6 +4,7 @@ import type { PDFDocumentProxy, PDFDocumentLoadingTask } from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import 'pdfjs-dist/web/pdf_viewer.css'
 import { kvGet, kvSet } from './storage'
+import type { PdfAnchor, PdfRect } from './notes'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl
 // компоненты просмотрщика берут библиотеку из глобальной переменной,
@@ -75,6 +76,10 @@ export class PdfReader {
   private thumbBusy = false
   private thumbGen = 0
   private activeThumb: HTMLElement | null = null
+  // заметки: прямоугольники подсветки по страницам
+  private noteRects = new Map<number, { id: string; title: string; r: PdfRect }[]>()
+  private flashId: string | null = null
+  onNoteClick: ((id: string, near: DOMRect) => void) | null = null
 
   constructor(private ui: PdfUi) {
     this.viewer = new PDFViewer({
@@ -96,6 +101,9 @@ export class PdfReader {
         ui.container.scrollTop = div.offsetTop + pos.frac * div.clientHeight
       }
     })
+    // pdf.js пересоздаёт содержимое страницы при перерисовке: возвращаем подсветку
+    this.bus.on('pagerendered', ({ pageNumber }: { pageNumber: number }) => this.drawNotes(pageNumber))
+    ui.container.addEventListener('click', (e) => this.hitNote(e))
     this.bus.on('pagechanging', ({ pageNumber }: { pageNumber: number }) => {
       ui.page.value = String(pageNumber)
       this.highlightThumb(pageNumber)
@@ -210,6 +218,7 @@ export class PdfReader {
     this.link.setDocument(null)
     this.ui.outline.textContent = ''
     this.hasOutline = false
+    this.noteRects.clear()
     this.thumbGen++
     this.thumbObserver.disconnect()
     this.thumbQueue = []
@@ -219,6 +228,101 @@ export class PdfReader {
     this.task = null
     this.doc = null
     if (task) await task.destroy()
+  }
+
+  /** Идентификатор документа для запасного хранения заметок. */
+  get docKey() {
+    return this.posKey.replace(/^pdfpos:/, '')
+  }
+
+  /** Привязка для текущего выделения в тексте PDF. */
+  selection(): { anchor: PdfAnchor; rect: DOMRect } | null {
+    const sel = getSelection()
+    if (!sel || sel.isCollapsed || !sel.rangeCount) return null
+    const range = sel.getRangeAt(0)
+    if (!this.ui.viewer.contains(range.commonAncestorContainer)) return null
+    const quote = sel.toString().replace(/\s+/g, ' ').trim()
+    if (!quote) return null
+    // страницы рядом с текущей: выделение не бывает длиннее пары страниц
+    const cur = this.viewer.currentPageNumber
+    const pages: { n: number; box: DOMRect }[] = []
+    for (let n = Math.max(1, cur - 2); n <= Math.min(this.viewer.pagesCount, cur + 3); n++) {
+      pages.push({ n, box: this.viewer.getPageView(n - 1).div.getBoundingClientRect() })
+    }
+    const rects: PdfRect[] = []
+    for (const r of range.getClientRects()) {
+      if (r.width < 1 || r.height < 1) continue
+      const cx = r.left + r.width / 2
+      const cy = r.top + r.height / 2
+      const pg = pages.find(({ box }) => cx >= box.left && cx <= box.right && cy >= box.top && cy <= box.bottom)
+      if (!pg) continue
+      const b = pg.box
+      rects.push({ page: pg.n, x: (r.left - b.left) / b.width, y: (r.top - b.top) / b.height, w: r.width / b.width, h: r.height / b.height })
+    }
+    if (!rects.length) return null
+    return { anchor: { kind: 'pdf', page: rects[0].page, quote, rects: mergeRects(rects) }, rect: range.getBoundingClientRect() }
+  }
+
+  setNotes(notes: { id: string; title: string; rects: PdfRect[] }[]) {
+    this.noteRects.clear()
+    for (const n of notes) {
+      for (const r of n.rects) {
+        let list = this.noteRects.get(r.page)
+        if (!list) this.noteRects.set(r.page, (list = []))
+        list.push({ id: n.id, title: n.title, r })
+      }
+    }
+    for (let n = 1; n <= this.viewer.pagesCount; n++) this.drawNotes(n)
+  }
+
+  /** Прокрутить к заметке и ненадолго выделить её. */
+  revealNote(id: string, rects: PdfRect[]) {
+    const first = rects[0]
+    if (!first || first.page > this.viewer.pagesCount) return
+    const div = this.viewer.getPageView(first.page - 1).div
+    this.ui.container.scrollTop = div.offsetTop + first.y * div.clientHeight - this.ui.container.clientHeight / 3
+    this.flashId = id
+    for (const p of new Set(rects.map((r) => r.page))) this.drawNotes(p)
+    setTimeout(() => {
+      if (this.flashId !== id) return
+      this.flashId = null
+      for (const el of this.ui.viewer.querySelectorAll('.note-hl.flash')) el.classList.remove('flash')
+    }, 1600)
+  }
+
+  private drawNotes(pageNumber: number) {
+    const div = this.viewer.getPageView(pageNumber - 1)?.div
+    if (!div) return
+    div.querySelector(':scope > .note-layer')?.remove()
+    const list = this.noteRects.get(pageNumber)
+    if (!list?.length) return
+    const layer = document.createElement('div')
+    layer.className = 'note-layer'
+    for (const { id, title, r } of list) {
+      const hl = document.createElement('div')
+      hl.className = id === this.flashId ? 'note-hl flash' : 'note-hl'
+      hl.dataset.note = id
+      hl.title = title
+      hl.style.cssText = `left:${r.x * 100}%;top:${r.y * 100}%;width:${r.w * 100}%;height:${r.h * 100}%`
+      layer.appendChild(hl)
+    }
+    div.appendChild(layer)
+  }
+
+  /** Подсветка не перехватывает мышь (иначе текст не выделить), поэтому попадание считаем сами. */
+  private hitNote(e: MouseEvent) {
+    if (!this.onNoteClick || !getSelection()?.isCollapsed) return
+    const page = (e.target as HTMLElement).closest<HTMLElement>('.page')
+    const n = +(page?.dataset.pageNumber ?? 0)
+    const list = this.noteRects.get(n)
+    if (!page || !list) return
+    const b = page.getBoundingClientRect()
+    const x = (e.clientX - b.left) / b.width
+    const y = (e.clientY - b.top) / b.height
+    const hit = list.find(({ r }) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h)
+    if (!hit) return
+    const r = hit.r
+    this.onNoteClick(hit.id, new DOMRect(b.left + r.x * b.width, b.top + r.y * b.height, r.w * b.width, r.h * b.height))
   }
 
   zoomIn() {
@@ -395,4 +499,21 @@ export class PdfReader {
     }
     this.ui.outline.appendChild(build(outline))
   }
+}
+
+/** Склеить прямоугольники выделения одной строки: текстовый слой pdf.js даёт их по кусочку на слово. */
+function mergeRects(rects: PdfRect[]): PdfRect[] {
+  const sorted = [...rects].sort((a, b) => a.page - b.page || a.y - b.y || a.x - b.x)
+  const out: PdfRect[] = []
+  for (const r of sorted) {
+    const last = out[out.length - 1]
+    const sameLine = last && last.page === r.page && Math.abs(last.y + last.h / 2 - (r.y + r.h / 2)) < Math.min(last.h, r.h) / 2
+    if (sameLine && r.x <= last.x + last.w + 0.01) {
+      const right = Math.max(last.x + last.w, r.x + r.w)
+      const top = Math.min(last.y, r.y)
+      const bottom = Math.max(last.y + last.h, r.y + r.h)
+      Object.assign(last, { x: Math.min(last.x, r.x), y: top, w: right - Math.min(last.x, r.x), h: bottom - top })
+    } else out.push({ ...r })
+  }
+  return out
 }

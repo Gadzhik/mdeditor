@@ -1,5 +1,5 @@
-import { EditorView, keymap, drawSelection, highlightActiveLine, dropCursor } from '@codemirror/view'
-import { EditorState, EditorSelection, type Extension } from '@codemirror/state'
+import { EditorView, keymap, drawSelection, highlightActiveLine, dropCursor, Decoration, type DecorationSet } from '@codemirror/view'
+import { EditorState, EditorSelection, StateEffect, StateField, type Extension } from '@codemirror/state'
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { languages } from '@codemirror/language-data'
@@ -70,12 +70,46 @@ function toggleMark(mark: string) {
   }
 }
 
+// --- Подсветка заметок: диапазоны сдвигаются вместе с правками текста ---
+
+export interface NoteRange {
+  id: string
+  from: number
+  to: number
+  title: string
+}
+
+const setNotes = StateEffect.define<NoteRange[]>()
+
+const notesField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(deco, tr) {
+    deco = deco.map(tr.changes)
+    for (const e of tr.effects) {
+      if (!e.is(setNotes)) continue
+      deco = Decoration.set(
+        e.value
+          .filter((r) => r.to > r.from)
+          .map((r) => Decoration.mark({ class: 'cm-note', attributes: { 'data-note': r.id, title: r.title } }).range(r.from, r.to)),
+        true,
+      )
+    }
+    return deco
+  },
+  provide: (f) => EditorView.decorations.from(f),
+})
+
 export interface Editor {
   view: EditorView
   getValue(): string
   setValue(text: string, cursor?: number): void
   cursor(): number
   setCursor(pos: number): void
+  setNoteRanges(ranges: NoteRange[]): void
+  /** Текущие (с учётом правок) диапазоны заметок. Удалённые целиком сюда не попадают. */
+  noteRanges(): { id: string; from: number; to: number }[]
+  /** Выделить диапазон и прокрутить к нему. */
+  reveal(from: number, to: number): void
 }
 
 export function createEditor(parent: HTMLElement, onChange: () => void, onScroll: () => void): Editor {
@@ -90,6 +124,7 @@ export function createEditor(parent: HTMLElement, onChange: () => void, onScroll
     EditorView.lineWrapping,
     markdown({ base: markdownLanguage, codeLanguages: languages }),
     syntaxHighlighting(highlight),
+    notesField,
     theme,
     keymap.of([
       { key: 'Mod-b', run: toggleMark('**') },
@@ -121,5 +156,16 @@ export function createEditor(parent: HTMLElement, onChange: () => void, onScroll
     },
     cursor: () => view.state.selection.main.head,
     setCursor: (pos) => view.dispatch({ selection: { anchor: Math.min(pos, view.state.doc.length) } }),
+    setNoteRanges: (ranges) => view.dispatch({ effects: setNotes.of(ranges) }),
+    noteRanges() {
+      const out: { id: string; from: number; to: number }[] = []
+      view.state.field(notesField).between(0, view.state.doc.length, (from, to, d) => {
+        out.push({ id: (d.spec.attributes as Record<string, string>)['data-note'], from, to })
+      })
+      return out
+    },
+    reveal(from, to) {
+      view.dispatch({ selection: { anchor: from, head: to }, effects: EditorView.scrollIntoView(from, { y: 'center' }) })
+    },
   }
 }

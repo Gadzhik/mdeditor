@@ -30,6 +30,7 @@
           <label class="row"><input type="checkbox" id="width-full" /> Во всю ширину</label>
         </div>
       </div>
+      <button id="btn-notes" title="Заметки к тексту. Выделите фрагмент и нажмите Alt+N, чтобы добавить">Заметки<span id="notes-count"></span></button>
       <button id="btn-theme" title="Тема"></button>
     </header>
     <main id="app" data-mode="split">
@@ -92,7 +93,26 @@
           </div>
         </div>
       </section>
+      <aside id="notes-panel" hidden>
+        <div id="notes-head">
+          <span>Заметки</span>
+          <button id="notes-close" class="icon" title="Скрыть панель">✕</button>
+        </div>
+        <div id="notes-list"></div>
+        <div id="notes-where"></div>
+      </aside>
     </main>
+    <button id="note-add" hidden title="Добавить заметку к выделенному (Alt+N)">＋ Заметка</button>
+    <div id="note-pop" hidden>
+      <blockquote id="note-pop-quote"></blockquote>
+      <textarea id="note-pop-text" rows="4" placeholder="Текст заметки (можно оставить пустым — тогда это просто выделение)"></textarea>
+      <div class="note-pop-row">
+        <button id="note-pop-del">Удалить</button>
+        <span class="spacer"></span>
+        <button id="note-pop-cancel" title="Esc">Отмена</button>
+        <button id="note-pop-save" class="primary" title="Ctrl+Enter">Сохранить</button>
+      </div>
+    </div>
     <div id="dropzone" hidden><div>Отпустите файл (.md, .pdf) или папку, чтобы открыть</div></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
