@@ -87,6 +87,8 @@ then open the address printed by the last command (usually `http://localhost:417
 ./mdeditor status     show whether the server is running
 ./mdeditor install    (optional) app menu shortcut and the mdeditor command
 ./mdeditor uninstall  remove the shortcut and the command
+./mdeditor default    make MD Editor the default app for .md and .pdf
+./mdeditor undefault  restore the previous default apps for .md and .pdf
 ```
 
 The default port is `4317`. Use a different one like this: `MDEDITOR_PORT=5000 ./mdeditor`.
@@ -94,6 +96,20 @@ The default port is `4317`. Use a different one like this: `MDEDITOR_PORT=5000 .
 ### Menu shortcut (optional)
 
 To launch the editor from your application menu rather than from the folder, run `./mdeditor install`. It adds an **MD Editor** shortcut with an icon (`~/.local/share/applications/mdeditor.desktop`) and an `mdeditor` command in `~/.local/bin` that you can run from any terminal. The shortcut points to the current folder location, so run the command again if you move the folder. To remove it: `./mdeditor uninstall`.
+
+### Default app for .md and .pdf
+
+MD Editor can be installed as an app (PWA) and made the default for Markdown and PDF files: they then open in it on double-click in your file manager, and `Ctrl+S` writes straight back to the opened file. A Chromium-based browser is required.
+
+1. Run `./mdeditor default`. A browser window with the editor opens.
+2. Click the **Установить** (Install) button in the editor toolbar (or the install icon in the address bar) and confirm.
+3. Run `./mdeditor default` again. The script finds the installed app and assigns it to `text/markdown` and `application/pdf`.
+
+The previous default apps are remembered; restore them with `./mdeditor undefault`. Once installed, `./mdeditor` launches the installed app.
+
+**Without the server.** The installed app caches itself (service worker) and opens even when the local server is not running, including when a file is opened from the file manager. The server is only needed to pick up a new version after updating the code: run `./mdeditor`, and the app updates the next time it opens.
+
+The first time you open a file, the browser may ask for permission to open such files in MD Editor, and the first time you save, for permission to write to the file.
 
 ## Usage
 
@@ -270,6 +286,8 @@ The reason is that direct file access (the File System Access API) is currently 
 **The project is on a removable drive.** The shortcut only works while the drive is mounted at the same path.
 
 **The draft changed to old text.** The draft is tied to the browser and the address. If you open the editor on a different port or in a different browser, it has its own draft.
+
+**A file opened from the terminal (`xdg-open file.md`) does not open in MD Editor.** File managers detect `.md` as `text/markdown`, but `xdg-open` on Hyprland and other non-GNOME/KDE environments often detects it as `text/plain` and opens a text editor. Opening from the file manager works; from the terminal, open the file through the installed app, or also assign it to `text/plain` if you want all text files to open in it.
 
 **Nothing changed after updating the code.** The script rebuilds the app on launch, but an open page keeps the old version. Reload the window (`Ctrl+R`).
 

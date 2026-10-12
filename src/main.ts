@@ -1054,6 +1054,49 @@ document.addEventListener('visibilitychange', () => {
   }
 })
 
+// --- Установка как приложения и открытие файлов из системы ---------------------
+
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {})
+}
+
+// Chromium предлагает установку событием beforeinstallprompt; показываем свою кнопку
+type InstallPrompt = Event & { prompt(): Promise<void>; userChoice: Promise<{ outcome: string }> }
+let installPrompt: InstallPrompt | null = null
+const installBtn = $('btn-install')
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault()
+  installPrompt = e as InstallPrompt
+  installBtn.hidden = false
+})
+window.addEventListener('appinstalled', () => {
+  installBtn.hidden = true
+  toast('Установлено. Чтобы открывать .md и .pdf по двойному клику, выполните ./mdeditor default')
+})
+installBtn.onclick = async () => {
+  if (!installPrompt) return
+  await installPrompt.prompt()
+  installPrompt = null
+  installBtn.hidden = true
+}
+
+interface LaunchParams {
+  files: FileSystemHandle[]
+}
+/** Файл, с которым приложение открыли из файлового менеджера (File Handling API). */
+function handleLaunches() {
+  const queue = (window as unknown as { launchQueue?: { setConsumer(cb: (p: LaunchParams) => void): void } }).launchQueue
+  queue?.setConsumer(async ({ files }) => {
+    const h = files?.find((f): f is FileSystemFileHandle => f.kind === 'file')
+    if (!h) return
+    try {
+      await openAny(await h.getFile(), h, await pathInFolder(h))
+    } catch (e) {
+      toast(`Не удалось открыть: ${(e as Error).message}`)
+    }
+  })
+}
+
 // --- Старт ---------------------------------------------------------------------
 
 async function init() {
@@ -1098,6 +1141,9 @@ async function init() {
       kvDel('lastPdf')
     }
   }
+
+  // файл, открытый из системы, обрабатываем последним: он важнее черновика и прошлого PDF
+  handleLaunches()
 }
 
 init()

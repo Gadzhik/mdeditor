@@ -7,6 +7,8 @@
 #   ./mdeditor status     показать, запущен ли сервер
 #   ./mdeditor install    добавить ярлык в меню приложений (и команду mdeditor в ~/.local/bin)
 #   ./mdeditor uninstall  убрать ярлык и команду
+#   ./mdeditor default    открывать .md и .pdf в MD Editor по умолчанию (нужно установленное приложение)
+#   ./mdeditor undefault  вернуть прежние программы для .md и .pdf
 #
 # Порт можно сменить переменной MDEDITOR_PORT (по умолчанию 4317).
 
@@ -22,6 +24,9 @@ DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 DESKTOP_FILE="$DATA_HOME/applications/mdeditor.desktop"
 ICON_FILE="$DATA_HOME/icons/hicolor/scalable/apps/mdeditor.svg"
 BIN_LINK="$HOME/.local/bin/mdeditor"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/mdeditor"
+PREV_DEFAULTS="$CONFIG_DIR/previous-defaults"
+MIME_TYPES=(text/markdown text/x-markdown application/pdf)
 
 die() { echo "mdeditor: $*" >&2; notify "$*"; exit 1; }
 notify() { command -v notify-send >/dev/null && notify-send -a "MD Editor" "MD Editor" "$1" || true; }
@@ -36,7 +41,7 @@ ensure_built() {
     npm install --no-fund --no-audit
   fi
   # пересобираем, только если исходники новее сборки
-  if [[ ! -f dist/index.html ]] || [[ -n "$(find src index.html vite.config.ts package.json -newer dist/index.html -print -quit)" ]]; then
+  if [[ ! -f dist/index.html ]] || [[ -n "$(find src public index.html vite.config.ts package.json -newer dist/index.html -print -quit)" ]]; then
     echo "Собираю…"
     npm run build --silent >/dev/null || die "сборка не удалась, запустите 'npm run build' в $APP_DIR"
   fi
@@ -58,8 +63,24 @@ start_server() {
   die "сервер не запустился, см. $LOG_FILE"
 }
 
+# .desktop-файл, который Chromium создаёт при установке MD Editor как приложения
+pwa_desktop() {
+  grep -lsx 'Name=MD Editor' "$DATA_HOME"/applications/*.desktop | xargs -r grep -ls -- '--app-id=' | head -n 1
+}
+
+chromium_bin() {
+  for b in chromium google-chrome-stable google-chrome brave brave-browser microsoft-edge-stable vivaldi; do
+    command -v "$b" >/dev/null && { echo "$b"; return; }
+  done
+}
+
 open_window() {
-  # Chromium-браузеры: отдельное окно без вкладок и полная работа с файлами на диске
+  # установленное приложение — его окно; иначе отдельное окно Chromium без вкладок
+  local pwa; pwa=$(pwa_desktop)
+  if [[ -n "$pwa" ]] && command -v gio >/dev/null; then
+    gio launch "$pwa" >/dev/null 2>&1 &
+    return
+  fi
   for b in chromium google-chrome-stable google-chrome brave brave-browser microsoft-edge-stable vivaldi; do
     if command -v "$b" >/dev/null; then
       nohup "$b" --app="$URL" >/dev/null 2>&1 &
@@ -102,6 +123,46 @@ EOF
   [[ ":$PATH:" == *":$HOME/.local/bin:"* ]] || echo "Внимание: ~/.local/bin нет в PATH"
 }
 
+set_default() {
+  local pwa; pwa=$(pwa_desktop)
+  if [[ -z "$pwa" ]]; then
+    local b; b=$(chromium_bin)
+    [[ -n "$b" ]] || die "нужен браузер на Chromium (Chromium, Chrome, Brave, Edge)"
+    ensure_built; start_server
+    # установка доступна в обычном окне браузера, а не в окне --app
+    nohup "$b" --new-window "$URL" >/dev/null 2>&1 &
+    echo "Сначала установите MD Editor как приложение. В открывшемся окне браузера"
+    echo "нажмите кнопку «Установить» на панели редактора (или значок установки"
+    echo "в адресной строке), а затем снова выполните:"
+    echo
+    echo "  $0 default"
+    exit 1
+  fi
+  local name; name=$(basename "$pwa")
+  mkdir -p "$CONFIG_DIR"
+  # запоминаем прежние программы один раз, чтобы undefault вернул именно их
+  if [[ ! -f "$PREV_DEFAULTS" ]]; then
+    for t in "${MIME_TYPES[@]}"; do echo "$t=$(xdg-mime query default "$t" 2>/dev/null)"; done >"$PREV_DEFAULTS"
+  fi
+  xdg-mime default "$name" "${MIME_TYPES[@]}"
+  for t in "${MIME_TYPES[@]}"; do
+    [[ "$(xdg-mime query default "$t")" == "$name" ]] || die "не удалось назначить $name для $t"
+  done
+  echo "Готово: .md и .pdf теперь открываются в MD Editor ($name)."
+  echo "Вернуть прежние программы: $0 undefault"
+}
+
+restore_default() {
+  [[ -f "$PREV_DEFAULTS" ]] || { echo "Нечего возвращать: $0 default не выполнялся"; return; }
+  while IFS='=' read -r t app; do
+    if [[ -n "$app" ]]; then
+      xdg-mime default "$app" "$t"
+      echo "$t → $app"
+    fi
+  done <"$PREV_DEFAULTS"
+  rm -f "$PREV_DEFAULTS"
+}
+
 uninstall_shortcut() {
   rm -f "$DESKTOP_FILE" "$ICON_FILE" "$BIN_LINK"
   echo "Ярлык и команда удалены"
@@ -114,6 +175,8 @@ case "${1:-}" in
   status) server_up && echo "Запущен: $URL" || echo "Не запущен" ;;
   install) ensure_built; install_shortcut ;;
   uninstall) uninstall_shortcut ;;
-  -h | --help | help) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//' ;;
+  default) set_default ;;
+  undefault) restore_default ;;
+  -h | --help | help) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//' ;;
   *) die "неизвестная команда '$1', см. $0 --help" ;;
 esac
