@@ -1060,10 +1060,14 @@ if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js').catch(() => {})
 }
 
-// Chromium предлагает установку событием beforeinstallprompt; показываем свою кнопку
+// Кнопка «Установить» видна всегда, пока редактор открыт вкладкой, а не установленным приложением.
+// Chromium присылает beforeinstallprompt не сразу (после взаимодействия со страницей),
+// поэтому без него кнопка подсказывает установку через меню браузера.
 type InstallPrompt = Event & { prompt(): Promise<void>; userChoice: Promise<{ outcome: string }> }
 let installPrompt: InstallPrompt | null = null
 const installBtn = $('btn-install')
+const standalone = matchMedia('(display-mode: standalone)').matches
+installBtn.hidden = standalone || !('serviceWorker' in navigator)
 window.addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault()
   installPrompt = e as InstallPrompt
@@ -1071,13 +1075,21 @@ window.addEventListener('beforeinstallprompt', (e) => {
 })
 window.addEventListener('appinstalled', () => {
   installBtn.hidden = true
-  toast('Установлено. Чтобы открывать .md и .pdf по двойному клику, выполните ./mdeditor default')
+  toast('Установлено. Теперь выполните ./mdeditor default, чтобы открывать .md и .pdf по двойному клику')
 })
 installBtn.onclick = async () => {
-  if (!installPrompt) return
-  await installPrompt.prompt()
-  installPrompt = null
-  installBtn.hidden = true
+  if (installPrompt) {
+    await installPrompt.prompt()
+    installPrompt = null
+    return
+  }
+  alert(
+    'Установите через меню Chromium:\n\n' +
+      '⋮ (справа вверху) → «Трансляция, сохранение и отправка» → «Установить страницу как приложение…»\n' +
+      '(в некоторых версиях: ⋮ → «Установить MD Editor…»)\n\n' +
+      'или нажмите значок установки в правой части адресной строки.\n\n' +
+      'Затем выполните в терминале: ./mdeditor default',
+  )
 }
 
 interface LaunchParams {
